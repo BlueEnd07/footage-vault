@@ -20,7 +20,7 @@ let lastRendered = "";
 let openId = null;
 
 const IN_PROGRESS = new Set(["new", "queued", "uploading", "uploaded"]);
-const ON_YT = new Set(["on_youtube", "done"]);
+const ON_YT = new Set(["on_youtube", "done", "youtube"]);
 const PROBLEM = new Set(["failed", "hold"]);
 const onPhoneSafe = (v) => v.source === "phone" && ON_YT.has(v.status) && !v.phone_cleared_at;
 
@@ -49,6 +49,7 @@ function statusText(v) {
     case "done": return "On YouTube · original deleted";
     case "hold": return "On YouTube · original kept (check failed)";
     case "failed": return "Failed";
+    case "youtube": return `On YouTube (${v.privacy || "uploaded directly"})`;
   }
   return v.status;
 }
@@ -56,20 +57,24 @@ function statusText(v) {
 // ---------- views ----------
 let events = [];
 let eventId = null;           // auto event being viewed in the photos view
-function setView(v, aid = null, eid = null) {
+function setView(v, aid = null, eid = null, pid = null) {
   view = v;
   albumId = aid;
   eventId = eid;
+  personId = pid;
   exitSelect();
-  const tab = v === "photos" && (aid || eid) ? "albums" : v;
+  const sub = aid || eid || pid;
+  const tab = v === "photos" && sub ? "albums" : v;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === tab));
   $("#photosView").hidden = v !== "photos";
   $("#albumsView").hidden = v !== "albums";
   $("#mapView").hidden = v !== "map";
-  $("#albumHeader").hidden = !(aid || eid);
+  $("#albumHeader").hidden = !sub;
   $("#renameAlbum").hidden = $("#deleteAlbum").hidden = !aid;
   $("#saveEvent").hidden = !eid;
-  $("#filters").hidden = !!(aid || eid);
+  $("#namePerson").hidden = $("#mergePerson").hidden = $("#hidePerson").hidden = !pid;
+  $("#filters").hidden = !!sub;
+  renderPersonFaces();
   window.scrollTo(0, 0);
   lastRendered = "";
   render();
@@ -82,6 +87,8 @@ const currentEvent = () => events.find((e) => e.id === eventId);
 function visible() {
   if (albumId) return videos.filter((v) => albumIds(v).includes(albumId));
   if (eventId) { const ids = new Set(currentEvent()?.video_ids || []); return videos.filter((v) => ids.has(v.id)); }
+  if (personId) return videos.filter((v) => videoFaces(v).some(([, pid]) => pid === personId));
+  if (filter === "fav") return videos.filter((v) => v.favorite);
   if (filter === "progress") return videos.filter((v) => IN_PROGRESS.has(v.status));
   if (filter === "phone") return videos.filter(onPhoneSafe);
   if (filter === "problems") return videos.filter((v) => PROBLEM.has(v.status));
@@ -93,7 +100,7 @@ function tile(v) {
   const prog = v.status === "uploading" ? `<div class="prog"><i style="width:${v.progress * 100}%"></i></div>` : "";
   return `<button class="tile${selected.has(v.id) ? " selected" : ""}" data-id="${v.id}" title="${esc(v.name)} — ${esc(statusText(v))}">
     ${hasThumb ? `<img loading="lazy" src="/media/thumbs/${v.id}.jpg" alt="">` : `<div class="ph">Preparing…</div>`}
-    <span class="dot s-${v.status}"></span><span class="check"></span><span class="dur">${fmtDur(v.duration)}</span>${prog}</button>`;
+    <span class="dot s-${v.status}"></span><span class="check"></span>${v.favorite ? '<span class="fav">♥</span>' : ""}<span class="dur">${fmtDur(v.duration)}</span>${prog}</button>`;
 }
 
 function renderGallery() {
@@ -120,6 +127,7 @@ function renderGallery() {
   $("#nPhone").textContent = n(onPhoneSafe);
   renderFreeBar();
   $("#nProblems").textContent = n((v) => PROBLEM.has(v.status));
+  $("#nFav").textContent = n((v) => v.favorite);
   document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.filter === filter));
 
   if (albumId) {
@@ -132,6 +140,12 @@ function renderGallery() {
     if (!e) return setView("albums");  // event changed shape (new clips arrived)
     $("#albumTitle").textContent = e.name;
   }
+  if (personId) {
+    const p = currentPerson();
+    if (!p) return setView("albums");  // merged or hidden
+    $("#albumTitle").textContent = p.name || "Who is this?";
+    $("#namePerson").textContent = p.name ? "Rename" : "Add name";
+  }
 }
 
 const card = (attr, cover, name, sub) => `
@@ -141,6 +155,7 @@ const card = (attr, cover, name, sub) => `
   </button>`;
 
 function renderAlbums() {
+  renderPeople();
   $("#eventsBlock").hidden = !events.length;
   $("#eventGrid").innerHTML = events.map((e) => card(`data-event="${e.id}"`, e.cover, e.name, `${e.count} clips`)).join("");
   $("#albumGrid").innerHTML = albums.length
@@ -149,7 +164,7 @@ function renderAlbums() {
 }
 
 function render() {
-  const key = [view, albumId, eventId, filter, selecting, [...selected].join(), status.connected, status.user_paused,
+  const key = [view, albumId, eventId, personId, JSON.stringify(people), filter, selecting, [...selected].join(), status.connected, status.user_paused,
     JSON.stringify(videos), JSON.stringify(albums), JSON.stringify(events)].join("|");
   if (key === lastRendered) return;
   lastRendered = key;
@@ -207,7 +222,7 @@ function showMap() {
 }
 $("#map").addEventListener("click", (e) => {
   const p = e.target.closest("[data-open]");
-  if (p) openViewer(+p.dataset.open);
+  if (p) openViewer(+p.dataset.open, videos.filter((v) => v.lat != null).map((v) => v.id));
 });
 
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
@@ -231,6 +246,12 @@ $("#selectBtn").onclick = () => { if (view !== "photos") setView("photos"); sele
 $("#selCancel").onclick = () => { exitSelect(); render(); };
 $("#selAddAlbum").onclick = () => openPicker([...selected]);
 $("#selDelete").onclick = () => openDelete([...selected]);
+$("#selFav").onclick = async () => {
+  const ids = [...selected];
+  const allFav = ids.every((id) => videos.find((v) => v.id === id)?.favorite);
+  await Promise.all(ids.map((id) => api(`/api/videos/${id}/favorite`, { favorite: !allFav })));
+  exitSelect(); refresh();
+};
 $("#selRemoveAlbum").onclick = async () => {
   await api(`/api/albums/${albumId}/remove`, { video_ids: [...selected] });
   exitSelect(); refresh();
@@ -404,34 +425,125 @@ async function runDelete() {
 }
 
 // ---------- viewer ----------
-function openViewer(id) {
+let viewerList = [];   // ids in the order shown when the viewer was opened (for swiping)
+function openViewer(id, list) {
+  viewerList = list || (view === "photos" ? visible().map((v) => v.id) : videos.map((v) => v.id));
+  if (!viewerList.includes(id)) viewerList = videos.map((v) => v.id);
+  $("#viewer").hidden = false;
+  document.body.classList.add("viewing");
+  showInViewer(id);
+}
+function showInViewer(id) {
   openId = id;
   const v = videos.find((x) => x.id === id);
-  const player = $("#player");
-  const ready = v.status !== "new";
+  if (!v) return closeViewer();
+  const player = $("#player"), frame = $("#ytFrame");
+  player.pause();
+  const ytOnly = v.source === "youtube";
+  const ready = !ytOnly && v.status !== "new";
   player.hidden = !ready;
-  $("#noPreview").hidden = ready;
+  frame.hidden = !ytOnly;
+  $("#noPreview").hidden = ready || ytOnly;
   if (ready) { player.poster = `/media/thumbs/${id}.jpg`; player.src = `/media/previews/${id}.mp4`; player.play().catch(() => {}); }
-  $("#viewer").hidden = false;
+  else { player.removeAttribute("src"); player.load(); }
+  // Videos uploaded straight to YouTube have no copy on the PC, so they play from YouTube.
+  const ytSrc = ytOnly ? `https://www.youtube.com/embed/${encodeURIComponent(v.youtube_id)}?autoplay=1&playsinline=1&rel=0` : "about:blank";
+  if (frame.src !== ytSrc) frame.src = ytSrc;
+  renderViewerChrome();
   renderDetails();
+}
+function renderViewerChrome() {
+  const v = videos.find((x) => x.id === openId);
+  if (!v) return;
+  const d = parseDate(v.recorded_at);
+  $("#vDate").textContent = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  $("#vSub").textContent = [d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }), v.place].filter(Boolean).join(" · ");
+  const yt = $("#vYt");
+  yt.hidden = !v.youtube_id;
+  if (v.youtube_id) yt.href = `https://www.youtube.com/watch?v=${encodeURIComponent(v.youtube_id)}`;
+  $("#vFav").classList.toggle("on", !!v.favorite);
+  $("#vFavIcon").textContent = v.favorite ? "♥" : "♡";
+  const i = viewerList.indexOf(openId);
+  $("#vPrev").disabled = i <= 0;
+  $("#vNext").disabled = i < 0 || i >= viewerList.length - 1;
+  $("#vDelete").disabled = v.status === "uploading";
+}
+function stepViewer(dir) {
+  const i = viewerList.indexOf(openId) + dir;
+  if (i < 0 || i >= viewerList.length) return;
+  const stage = $("#stage");
+  $("#viewer").classList.add("swipe-anim");
+  stage.style.setProperty("--dx", "0");
+  showInViewer(viewerList[i]);
+  setTimeout(() => $("#viewer").classList.remove("swipe-anim"), 200);
 }
 function closeViewer() {
   openId = null;
   const p = $("#player"); p.pause(); p.removeAttribute("src"); p.load();
+  $("#ytFrame").src = "about:blank";
   $("#viewer").hidden = true;
+  $("#viewer").classList.remove("info-open");
+  document.body.classList.remove("viewing");
 }
 $("#viewerClose").onclick = closeViewer;
+$("#vPrev").onclick = () => stepViewer(-1);
+$("#vNext").onclick = () => stepViewer(1);
+$("#vInfo").onclick = () => { $("#viewer").classList.toggle("info-open"); renderDetails(); };
+$("#vAlbum").onclick = () => openId && openPicker([openId]);
+$("#vDelete").onclick = () => openId && openDelete([openId]);
+$("#vFav").onclick = async () => {
+  const v = videos.find((x) => x.id === openId);
+  if (!v) return;
+  v.favorite = v.favorite ? 0 : 1;   // instant feedback; the next refresh confirms
+  renderViewerChrome();
+  await api(`/api/videos/${v.id}/favorite`, { favorite: !!v.favorite });
+  refresh();
+};
 document.addEventListener("keydown", (e) => {
+  if (!$("#viewer").hidden && !e.target.closest("input, textarea")) {
+    if (e.key === "ArrowLeft") return stepViewer(-1);
+    if (e.key === "ArrowRight") return stepViewer(1);
+  }
   if (e.key !== "Escape") return;
-  if (!$("#picker").hidden) $("#picker").hidden = true;
+  if (!$("#peoplePicker").hidden) $("#peoplePicker").hidden = true;
+  else if (!$("#picker").hidden) $("#picker").hidden = true;
+  else if (!$("#delSheet").hidden) $("#delSheet").hidden = true;
+  else if ($("#viewer").classList.contains("info-open")) $("#viewer").classList.remove("info-open");
   else if (!$("#viewer").hidden) closeViewer();
   else if (!$("#settings").hidden) $("#settings").hidden = true;
   else if (selecting) { exitSelect(); render(); }
 });
 
+// Swipe left/right for next/previous, down to close (like Google Photos).
+(() => {
+  const stage = $("#stage");
+  let x0 = null, y0 = 0, t0 = 0, onControls = false;
+  stage.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) { x0 = null; return; }
+    const t = e.touches[0], r = $("#player").getBoundingClientRect();
+    // Don't steal the video's own scrub bar at the bottom of the player.
+    onControls = !$("#player").hidden && t.clientY > r.bottom - 56 && t.clientY < r.bottom + 8;
+    x0 = t.clientX; y0 = t.clientY; t0 = Date.now();
+  }, { passive: true });
+  stage.addEventListener("touchend", (e) => {
+    if (x0 === null || onControls) return;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = null;
+    if (Date.now() - t0 > 800) return;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepViewer(dx < 0 ? 1 : -1);
+    else if (dy > 110 && Math.abs(dy) > Math.abs(dx) * 1.5) closeViewer();
+    else if (dy < -90 && Math.abs(dy) > Math.abs(dx) * 1.5) { $("#viewer").classList.add("info-open"); renderDetails(); }
+  }, { passive: true });
+})();
+
+const personName = (pid) => people.find((p) => p.id === pid)?.name;
+const videoFaces = (v) => (v.faces ? String(v.faces).split(",").map((s) => s.split(":").map(Number)) : []);
+
 function renderDetails() {
   const v = videos.find((x) => x.id === openId);
   if (!v) return closeViewer();
+  renderViewerChrome();
+  if (!$("#viewer").classList.contains("info-open")) return;
   const d = parseDate(v.recorded_at);
   let note = "";
   if (onPhoneSafe(v))
@@ -440,31 +552,105 @@ function renderDetails() {
     note = `<div class="note good">✓ On YouTube and removed from your phone.</div>`;
   else if (v.source === "phone" && !PROBLEM.has(v.status))
     note = `<div class="note">Keep this video on your phone until it says it's safe to delete.</div>`;
+  else if (v.source === "youtube")
+    note = `<div class="note">Uploaded to YouTube directly, so it plays from YouTube. ${v.privacy === "private" ? "YouTube may only play private videos in the YouTube app/site — use ▶ at the top." : ""}</div>`;
   if (v.error) note += `<div class="note bad">${esc(v.error)}</div>`;
 
   const chips = albumIds(v).map((id) => albums.find((a) => a.id === id)).filter(Boolean)
     .map((a) => `<button class="album-chip" data-goto="${a.id}">${esc(a.name)}</button>`).join("");
-  const yt = v.youtube_id ? `<a class="btn" target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=${esc(v.youtube_id)}">Watch on YouTube (full quality)</a>
-    <a class="btn" target="_blank" rel="noopener" href="https://studio.youtube.com/video/${esc(v.youtube_id)}/edit">YouTube Studio</a>` : "";
+  const seen = new Set();
+  // Only people listed in People (named or in 2+ clips); ✕ = "not them" for this one face.
+  const faceChips = videoFaces(v).filter(([, pid]) => people.some((p) => p.id === pid) && !seen.has(pid) && seen.add(pid))
+    .map(([fid, pid]) => `<span class="face-wrap"><button class="face-chip" data-person="${pid}"><img src="/media/faces/${fid}.jpg" alt="">${esc(personName(pid) || "Add name")}</button>
+      <button class="not-them" data-notme="${fid}" title="Not ${esc(personName(pid) || "this person")}" aria-label="Not this person">✕</button></span>`).join("");
   const retry = PROBLEM.has(v.status) ? `<button class="btn primary" id="retryBtn">${v.status === "hold" ? "Re-check" : "Retry"}</button>` : "";
+  const yt = v.youtube_id ? `<a class="btn" target="_blank" rel="noopener" href="https://studio.youtube.com/video/${esc(v.youtube_id)}/edit">YouTube Studio</a>` : "";
 
-  $("#details").innerHTML = `<h3>${esc(v.name)}</h3><div class="muted">${d.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" })}</div>
+  $("#details").innerHTML = `<h3>${esc(v.name)}</h3>
+    <div class="muted">${d.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" })}${v.place ? " · " + esc(v.place) : ""}</div>
+    ${note}
+    ${faceChips ? `<h4>People</h4><div class="faces-row">${faceChips}</div>` : ""}
+    <h4>Albums</h4><div class="album-chips">${chips}<button class="album-chip" id="addToAlbum">＋ Add to album</button></div>
+    <h4>Details</h4>
     <dl><dt>Status</dt><dd>${esc(statusText(v))}</dd>
       <dt>Length</dt><dd>${fmtDur(v.duration)}</dd>
-      <dt>Resolution</dt><dd>${v.width}×${v.height}</dd>
-      <dt>Size</dt><dd>${fmtSize(v.size)}</dd>
-      <dt>From</dt><dd>${v.source === "phone" ? "Phone" : "PC"}</dd>
-      ${v.place ? `<dt>Place</dt><dd>${esc(v.place)}</dd>` : ""}</dl>
-    <div class="album-chips">${chips}<button class="album-chip" id="addToAlbum">＋ Album</button></div>
-    ${note}<div class="row">${yt}${retry}</div>
-    <p class="muted" style="margin-top:16px;font-size:13px">The player here uses a 720p copy kept on your PC.</p>
-    <div class="del-link"><button class="btn danger" id="delOne" ${v.status === "uploading" ? "disabled title=\"Wait until the upload finishes\"" : ""}>Delete forever…</button></div>`;
-  $("#delOne").onclick = () => openDelete([v.id]);
+      ${v.width ? `<dt>Resolution</dt><dd>${v.width}×${v.height}</dd>` : ""}
+      ${v.size ? `<dt>Size</dt><dd>${fmtSize(v.size)}</dd>` : ""}
+      <dt>From</dt><dd>${v.source === "phone" ? "Phone" : v.source === "youtube" ? "YouTube" : "PC"}</dd>
+      ${v.privacy ? `<dt>On YouTube</dt><dd>${esc(v.privacy)}</dd>` : ""}</dl>
+    <div class="row">${yt}${retry}</div>
+    ${v.source !== "youtube" ? '<p class="muted" style="margin-top:12px;font-size:13px">Plays a 720p copy kept on your PC. ▶ at the top opens full quality on YouTube.</p>' : ""}`;
   $("#addToAlbum").onclick = () => openPicker([v.id]);
   $("#details").querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => { closeViewer(); setView("photos", +b.dataset.goto); });
+  $("#details").querySelectorAll("[data-person]").forEach((b) => b.onclick = () => { closeViewer(); setView("photos", null, null, +b.dataset.person); });
+  $("#details").querySelectorAll("[data-notme]").forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    await api(`/api/faces/${b.dataset.notme}/remove`, {});
+    refresh();
+  });
   const rb = $("#retryBtn");
   if (rb) rb.onclick = async () => { await api(`/api/videos/${v.id}/retry`, {}); refresh(); };
 }
+
+// ---------- people ----------
+let people = [];
+let peopleInfo = { others: 0, scan: {} };
+let personId = null;
+const currentPerson = () => people.find((p) => p.id === personId);
+const personCard = (p, attr = `data-pid="${p.id}"`) => `<button class="person" ${attr}>
+  ${p.cover_face ? `<img loading="lazy" src="/media/faces/${p.cover_face}.jpg" alt="">` : '<span class="ph-face"></span>'}
+  <div class="pname${p.name ? "" : " unnamed"}">${esc(p.name || "Add name")}</div><div class="pcount">${p.videos} clip${p.videos === 1 ? "" : "s"}</div></button>`;
+function renderPeople() {
+  const s = peopleInfo.scan || {};
+  const missing = s.models === "missing";
+  $("#peopleBlock").hidden = !people.length && !s.running && !missing;
+  $("#peopleNote").textContent = missing ? "Face models missing — they download automatically when the PC is online"
+    : s.running ? `Finding faces… ${s.done}/${s.total} clips` : "Found on this PC — nothing is uploaded";
+  $("#peopleRow").innerHTML = people.map((p) => personCard(p)).join("");
+}
+$("#peopleRow").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-pid]");
+  if (b) setView("photos", null, null, +b.dataset.pid);
+});
+async function renderPersonFaces() {
+  const box = $("#personFaces");
+  if (!personId) { box.hidden = true; return; }
+  const list = await api(`/api/people/${personId}/faces`);
+  box.hidden = list.length < 2;
+  box.innerHTML = list.slice(0, 60).map((f) => `<div class="pf"><img src="/media/faces/${f.id}.jpg" alt="">
+    <button data-notme="${f.id}" title="Not this person">✕</button></div>`).join("");
+}
+$("#personFaces").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-notme]");
+  if (!b) return;
+  await api(`/api/faces/${b.dataset.notme}/remove`, {});
+  await refresh(); renderPersonFaces();
+});
+$("#namePerson").onclick = async () => {
+  const p = currentPerson();
+  const name = prompt("Who is this?", p?.name || "");
+  if (name === null) return;
+  await api(`/api/people/${personId}/name`, { name });
+  refresh();
+};
+$("#hidePerson").onclick = async () => {
+  if (!confirm("Hide this person from People? Their clips stay.")) return;
+  await api(`/api/people/${personId}/hide`, {});
+  await refresh(); setView("albums");
+};
+$("#mergePerson").onclick = () => {
+  $("#peoplePickerList").innerHTML = people.filter((p) => p.id !== personId).map((p) => personCard(p, `data-into="${p.id}"`)).join("")
+    || '<p class="muted">No one else yet.</p>';
+  $("#peoplePicker").hidden = false;
+};
+$("#peoplePickerList").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-into]");
+  if (!b) return;
+  const into = +b.dataset.into;
+  await api(`/api/people/${personId}/merge`, { into });
+  $("#peoplePicker").hidden = true;
+  await refresh(); setView("photos", null, null, into);
+});
 
 // ---------- sending files from this device (phone) ----------
 const sendQueue = [];
@@ -555,6 +741,12 @@ $("#watchList").addEventListener("click", async (e) => {
   await refresh(); renderSettings();
 });
 
+$("#ytSyncBtn").onclick = async () => {
+  await api("/api/youtube/import", {});
+  $("#ytSyncState").textContent = "Syncing…";
+  setTimeout(refresh, 8000);
+};
+
 async function connect() {
   // Open the tab first (synchronously) so phones don't block it as a popup.
   const tab = window.open("about:blank", "_blank");
@@ -599,6 +791,9 @@ async function renderSettings() {
     : status.auth === "expired" ? "Google sign-in ran out. Reconnect to continue uploading."
     : "Not connected.";
 
+  const yi = status.yt_import;
+  if ($("#ytSyncState").textContent !== "Syncing…" || yi)
+    $("#ytSyncState").textContent = yi ? `Last sync ${yi.at.slice(11, 16)}: ${yi.added} new video${yi.added === 1 ? "" : "s"}, ${yi.albums} new album${yi.albums === 1 ? "" : "s"}` : "";
   const ts = status.tailscale;
   $("#tsBlock").innerHTML = !ts ? `<p class="muted">Tailscale isn't running on this PC.</p>`
     : ts.https ? `<p class="muted">From anywhere (Tailscale). On your phone open this in Chrome, then <b>⋮ → Install app</b>:</p><div class="code">${esc(ts.url)}</div>`
@@ -715,11 +910,14 @@ function renderBanner() {
 // ---------- polling ----------
 async function refresh() {
   try {
-    const [v, a, s, ev] = await Promise.all([fetch("/api/videos"), fetch("/api/albums"), fetch("/api/status"), fetch("/api/events")]);
+    const [v, a, s, ev, pp] = await Promise.all([fetch("/api/videos"), fetch("/api/albums"), fetch("/api/status"),
+      fetch("/api/events"), fetch("/api/people")]);
     if (v.status === 401) return location.reload();
     videos = await v.json();
     albums = await a.json();
     events = await ev.json();
+    peopleInfo = await pp.json();
+    people = peopleInfo.people || [];
     status = await s.json();
     document.body.classList.toggle("remote", !status.local);
     render();

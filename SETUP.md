@@ -144,6 +144,31 @@ In the app, tap **＋** and pick videos. On the same Wi-Fi you can also use the 
   This needs the camera to save location: on the phone, open **Camera → Settings → Location / Geotag** and turn it on.
   Older videos recorded without it can't be placed.
 
+## People (face identification)
+
+- Footage Vault finds faces in every clip and groups the same person together. It runs **entirely on this PC**:
+  no picture or face data is uploaded anywhere. The two small face models are downloaded once from OpenCV.
+- Find them at the top of **Albums → People**. Tap someone, then **Add name**.
+- If one person shows up twice, open one of them and tap **Same person as…**.
+- If a wrong face got mixed in, open the person and tap **✕** on that face.
+- Strangers seen in only one clip are left out of the list.
+- Videos uploaded straight to YouTube aren't scanned, because there's no copy on the PC to look at.
+
+## Watching videos
+
+- Swipe **left/right** for the next or previous video, **down** to close, and **up** for Info.
+  On the PC, use the arrow keys or the ‹ › buttons.
+- The bottom bar has **♡ Favourite**, **ⓘ Info**, **＋ Add to** (album) and **🗑 Delete**.
+  ▶ at the top opens the video in full quality on YouTube.
+- The **♥ Favourites** filter is on the Videos tab.
+
+## Videos you uploaded to YouTube yourself
+
+Footage Vault checks your channel every 30 minutes, or right away with **⚙ → Sync from YouTube**:
+- Videos uploaded directly to YouTube (private, unlisted or public) appear in the gallery and play from YouTube.
+- Every playlist on the channel becomes an album. Changes made on YouTube (renames, removed videos,
+  deleted playlists) carry over to the vault, and changes made in the vault carry over to YouTube.
+
 ## Delete forever
 
 Open a video and tap **Delete forever…**, or select several videos and tap **Delete**.

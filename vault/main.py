@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, events, media, notify, worker, youtube
+from . import db, events, faces, media, notify, worker, youtube
 from .config import INCOMING, PREVIEWS, STATIC, THUMBS, load_settings, save_settings
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -126,6 +126,11 @@ def list_videos():
     return db.rows("""SELECT v.id, v.name, v.source, v.size, v.duration, v.width, v.height, v.recorded_at,
                              v.status, v.progress, v.error, v.youtube_id, v.delete_after, v.deleted_at,
                              v.phone_cleared_at, v.sync_path IS NOT NULL AS synced, v.lat, v.lon, v.place,
+                             v.favorite, v.privacy,
+                             (SELECT group_concat(DISTINCT f.person_id) FROM faces f JOIN persons p ON p.id = f.person_id
+                               WHERE f.video_id = v.id AND p.hidden = 0) AS people,
+                             (SELECT group_concat(f.id || ':' || f.person_id) FROM faces f JOIN persons p ON p.id = f.person_id
+                               WHERE f.video_id = v.id AND p.hidden = 0) AS faces,
                              (SELECT group_concat(av.album_id) FROM album_videos av
                                WHERE av.video_id = v.id AND av.removed = 0) AS albums
                       FROM videos v ORDER BY v.recorded_at DESC""")
@@ -147,6 +152,8 @@ def status(request: Request):
         "counts": counts,
         "delete_after_days": s["delete_after_days"],
         "push_devices": db.row("SELECT COUNT(*) n FROM push_subs")["n"],
+        "yt_import": worker.state["yt_import"],
+        "faces": faces.progress(),  # {checked, total, models_ok, ...}
     }
     if is_local(request):
         out["lan_url"] = f"http://{lan_ip()}:{s['port']}"
@@ -231,6 +238,16 @@ def remove_watch_folder(req: FolderReq, request: Request):
     return {"ok": True}
 
 
+class FavReq(BaseModel):
+    favorite: bool
+
+
+@app.post("/api/videos/{vid}/favorite")
+def set_favorite(vid: int, req: FavReq):
+    db.run("UPDATE videos SET favorite=? WHERE id=?", (1 if req.favorite else 0, vid))
+    return {"ok": True}
+
+
 @app.post("/api/videos/{vid}/retry")
 def retry(vid: int):
     v = db.row("SELECT status, youtube_id FROM videos WHERE id=?", (vid,))
@@ -309,6 +326,59 @@ def list_events():
     return events.build(vids, float(load_settings().get("event_gap_hours", 3)))
 
 
+# ---------- people (face identification, all local) ----------
+
+@app.get("/api/people")
+def list_people():
+    """Named people and anyone seen in 2+ clips (strangers seen once are noise; hidden never)."""
+    shown = faces.people()
+    total = db.row("SELECT COUNT(*) n FROM persons")["n"]
+    return {"people": shown, "others": total - len(shown), "scan": faces.progress()}
+
+
+@app.get("/api/people/{pid}/faces")
+def person_faces(pid: int):
+    return db.rows("""SELECT id, video_id, t, score FROM faces WHERE person_id=?
+                      ORDER BY score * MIN(size, 160) DESC""", (pid,))
+
+
+class NameReq(BaseModel):
+    name: str
+
+
+@app.post("/api/people/{pid}/name")
+@app.post("/api/people/{pid}/rename")
+def name_person(pid: int, req: NameReq):
+    faces.rename(pid, req.name)  # naming someone also un-hides them
+    return {"ok": True}
+
+
+class MergeReq(BaseModel):
+    into: int
+
+
+@app.post("/api/people/{pid}/merge")
+def merge_person(pid: int, req: MergeReq):
+    try:
+        faces.merge(pid, req.into)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/people/{pid}/hide")
+def hide_person(pid: int):
+    faces.hide(pid)
+    return {"ok": True}
+
+
+@app.post("/api/faces/{fid}/remove")
+def remove_face(fid: int):
+    """'Not this person': the face moves to a person of its own (out of sight unless they reappear)."""
+    faces.remove_face(fid)
+    return {"ok": True}
+
+
 @app.get("/api/albums")
 def list_albums():
     return db.rows("""
@@ -375,6 +445,13 @@ def youtube_login():
     if not youtube.has_client_secret():
         raise HTTPException(400, "client_secret.json is missing (see SETUP.md)")
     return {"url": youtube.login_url(_redirect_uri())}
+
+
+@app.post("/api/youtube/import")
+def youtube_import_now():
+    """'Sync from YouTube': pull videos uploaded elsewhere and playlists, within ~10 s."""
+    worker.state["yt_import_now"] = True
+    return {"ok": True}
 
 
 class FinishReq(BaseModel):
@@ -489,6 +566,7 @@ def service_worker():
 
 app.mount("/media/thumbs", StaticFiles(directory=THUMBS), name="thumbs")
 app.mount("/media/previews", StaticFiles(directory=PREVIEWS), name="previews")
+app.mount("/media/faces", StaticFiles(directory=faces.FACE_CROPS), name="faces")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

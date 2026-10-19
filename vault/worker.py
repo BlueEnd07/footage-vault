@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from send2trash import send2trash
 
-from . import db, media, notify, youtube
+from . import db, faces, media, notify, youtube
 from .config import DATA, INCOMING, PREVIEWS, THUMBS, load_settings
 
 log = logging.getLogger("vault")
@@ -25,6 +25,8 @@ state = {
     "user_paused": False,   # "Pause uploads" in the tray menu
     "import": None,         # {"folder", "found", "added", "skipped", "running"}
     "albums_paused_until": 0.0,
+    "yt_import": None,       # result of the last pull from YouTube
+    "yt_import_now": False,  # "Sync from YouTube" button
 }
 _import_lock = threading.Lock()
 
@@ -388,6 +390,7 @@ def delete_forever(ids: list[int], delete_copies: bool) -> dict:
             send2trash(v["path"])
         (THUMBS / f"{vid}.jpg").unlink(missing_ok=True)
         (PREVIEWS / f"{vid}.mp4").unlink(missing_ok=True)
+        faces.forget_video(vid)
         db.run("INSERT OR REPLACE INTO tombstones (fingerprint, name, deleted_at) VALUES (?,?,?)",
                (v["fingerprint"], v["name"], db.now()))
         db.run("DELETE FROM album_videos WHERE video_id=?", (vid,))  # YouTube drops playlist items itself
@@ -445,7 +448,7 @@ def _sync_albums():
             """SELECT av.album_id, av.video_id, a.playlist_id, v.youtube_id
                FROM album_videos av JOIN albums a ON a.id = av.album_id JOIN videos v ON v.id = av.video_id
                WHERE av.removed=0 AND av.item_id IS NULL AND a.deleted=0 AND a.playlist_id IS NOT NULL
-                 AND v.youtube_id IS NOT NULL AND v.status IN ('uploaded','on_youtube','done','hold')""")
+                 AND v.youtube_id IS NOT NULL AND v.status IN ('uploaded','on_youtube','done','hold','youtube')""")
         for r in pending:
             item = youtube.add_to_playlist(r["playlist_id"], r["youtube_id"])
             db.run("UPDATE album_videos SET item_id=? WHERE album_id=? AND video_id=?",
@@ -457,10 +460,105 @@ def _sync_albums():
         state["albums_paused_until"] = time.time() + 300
 
 
+# ---------- pull from YouTube: videos uploaded elsewhere + playlists as albums ----------
+
+def _yt_time(value: str | None) -> str:
+    try:
+        dt = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+        return dt.astimezone().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return db.now()
+
+
+def _download_thumb(url: str | None, vid: int) -> None:
+    if not url:
+        return
+    try:
+        import urllib.request
+        tmp = THUMBS / f"{vid}.part"
+        urllib.request.urlretrieve(url, tmp)
+        tmp.replace(THUMBS / f"{vid}.jpg")
+    except Exception as e:
+        log.warning("Thumbnail download failed for %s: %s", vid, e)
+
+
+def import_from_youtube() -> dict:
+    """Adds channel videos the vault doesn't know (uploaded directly to YouTube) and
+    mirrors playlists as albums. Cheap on quota: ~1 unit per 50 videos."""
+    info = {"added": 0, "removed": 0, "albums": 0}
+    ids = youtube.my_upload_ids()
+    on_channel = set(ids)
+    known = {r["youtube_id"] for r in db.rows("SELECT youtube_id FROM videos WHERE youtube_id IS NOT NULL")}
+    gone = {r["fingerprint"][3:] for r in db.rows("SELECT fingerprint FROM tombstones WHERE fingerprint LIKE 'yt:%'")}
+    new = [i for i in ids if i not in known and i not in gone]
+    for d in youtube.video_details(new):
+        if d["upload_status"] not in ("processed", "uploaded"):
+            continue
+        try:
+            vid = db.run(
+                """INSERT INTO videos (fingerprint, name, source, path, size, duration, recorded_at, imported_at,
+                                       status, youtube_id, privacy, geo_checked, faces_checked)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1)""",
+                ("yt:" + d["id"], d["title"], "youtube", "", 0, d["duration"], _yt_time(d["recorded"]),
+                 db.now(), "youtube", d["id"], d["privacy"]))
+        except sqlite3.IntegrityError:
+            continue
+        _download_thumb(d["thumb"], vid)
+        info["added"] += 1
+    # Deleted on YouTube directly: drop the vault entry (it has no local file).
+    for r in db.rows("SELECT id, youtube_id FROM videos WHERE source='youtube'"):
+        if r["youtube_id"] not in on_channel:
+            faces.forget_video(r["id"])
+            db.run("DELETE FROM album_videos WHERE video_id=?", (r["id"],))
+            db.run("DELETE FROM videos WHERE id=?", (r["id"],))
+            (THUMBS / f"{r['id']}.jpg").unlink(missing_ok=True)
+            info["removed"] += 1
+
+    by_yt = {r["youtube_id"]: r["id"] for r in db.rows("SELECT id, youtube_id FROM videos WHERE youtube_id IS NOT NULL")}
+    playlists = youtube.my_playlists()
+    live = {p["id"] for p in playlists}
+    for p in playlists:
+        a = db.row("SELECT * FROM albums WHERE playlist_id=?", (p["id"],))
+        if not a:
+            aid = db.run("INSERT INTO albums (name, playlist_id, title_synced, created_at) VALUES (?,?,1,?)",
+                         (p["title"], p["id"], db.now()))
+            info["albums"] += 1
+        else:
+            aid = a["id"]
+            if a["deleted"]:
+                continue
+            if a["title_synced"] and a["name"] != p["title"]:  # renamed on YouTube
+                db.run("UPDATE albums SET name=? WHERE id=?", (p["title"], aid))
+        items = youtube.playlist_items(p["id"])
+        item_ids = {i for i, _ in items}
+        for item_id, yt_id in items:
+            vid = by_yt.get(yt_id)
+            if vid is None:
+                continue
+            row = db.row("SELECT item_id, removed FROM album_videos WHERE album_id=? AND video_id=?", (aid, vid))
+            if not row:
+                db.run("INSERT INTO album_videos (album_id, video_id, item_id, added_at) VALUES (?,?,?,?)",
+                       (aid, vid, item_id, db.now()))
+            elif not row["item_id"] and not row["removed"]:
+                db.run("UPDATE album_videos SET item_id=? WHERE album_id=? AND video_id=?", (item_id, aid, vid))
+        # Removed from the playlist on YouTube (but not waiting on a local change)
+        for r in db.rows("SELECT video_id, item_id FROM album_videos WHERE album_id=? AND item_id IS NOT NULL AND removed=0", (aid,)):
+            if r["item_id"] not in item_ids:
+                db.run("DELETE FROM album_videos WHERE album_id=? AND video_id=?", (aid, r["video_id"]))
+    # Playlist deleted on YouTube: delete the album too (its videos stay)
+    for a in db.rows("SELECT id, playlist_id FROM albums WHERE deleted=0 AND playlist_id IS NOT NULL"):
+        if a["playlist_id"] not in live:
+            db.run("DELETE FROM album_videos WHERE album_id=?", (a["id"],))
+            db.run("DELETE FROM albums WHERE id=?", (a["id"],))
+    state["yt_import"] = {**info, "at": db.now()}
+    return info
+
+
 # ---------- main YouTube loop ----------
 
 def _youtube_loop():
     last_check = 0.0
+    last_import = 0.0
     while True:
         try:
             if not youtube.credentials():
@@ -475,6 +573,16 @@ def _youtube_loop():
                 last_check = time.time()
                 _check_youtube()
                 _safe_delete_due()
+            if state["yt_import_now"] or time.time() - last_import > 1800:
+                state["yt_import_now"] = False
+                last_import = time.time()
+                try:
+                    _sync_albums()  # push local album changes first so they aren't undone
+                    import_from_youtube()
+                except youtube.QuotaExceeded:
+                    pass
+                except Exception:
+                    log.exception("YouTube import failed")
             _sync_albums()
             if state["user_paused"]:
                 time.sleep(3)
@@ -499,5 +607,6 @@ def start():
     db.run("UPDATE videos SET status='queued', progress=0 WHERE status='uploading'")
     notify.start()
     threading.Thread(target=_backfill_locations, daemon=True, name="geo_backfill").start()
+    faces.start()
     for fn in (_media_loop, _youtube_loop, _watch_loop):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()

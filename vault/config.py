@@ -8,13 +8,15 @@ DATA = Path(os.environ.get("VAULT_DATA") or ROOT / "data")
 THUMBS = DATA / "thumbs"
 PREVIEWS = DATA / "previews"
 INCOMING = DATA / "incoming"  # videos sent from the phone land here
+FACES = DATA / "faces"  # face crops shown in People (made on this PC)
 DB_PATH = DATA / "vault.db"
 TOKEN_PATH = DATA / "token.json"
 SETTINGS_PATH = DATA / "settings.json"
 CLIENT_SECRET = ROOT / "client_secret.json"
 STATIC = ROOT / "web"
+MODELS = ROOT / "models"  # face detection/recognition models, downloaded on first run
 
-for d in (DATA, THUMBS, PREVIEWS, INCOMING):
+for d in (DATA, THUMBS, PREVIEWS, INCOMING, FACES):
     d.mkdir(parents=True, exist_ok=True)
 
 DEFAULTS = {

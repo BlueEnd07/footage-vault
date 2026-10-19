@@ -196,6 +196,59 @@ def remove_from_playlist(item_id: str) -> None:
     _call(_service().playlistItems().delete(id=item_id))
 
 
+# ---------- reading the channel (videos uploaded outside the vault, playlists) ----------
+
+def _pages(request_fn, **kw):
+    token = None
+    while True:
+        res = _call(request_fn(**kw, maxResults=50, pageToken=token) if token else request_fn(**kw, maxResults=50))
+        yield from res.get("items", [])
+        token = res.get("nextPageToken")
+        if not token:
+            return
+
+
+def my_upload_ids() -> list[str]:
+    svc = _service()
+    ch = _call(svc.channels().list(part="contentDetails", mine=True)).get("items") or []
+    if not ch:
+        return []
+    uploads = ch[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    return [it["contentDetails"]["videoId"]
+            for it in _pages(svc.playlistItems().list, part="contentDetails", playlistId=uploads)]
+
+
+def video_details(ids: list[str]) -> list[dict]:
+    svc, out = _service(), []
+    for i in range(0, len(ids), 50):
+        res = _call(svc.videos().list(part="snippet,status,contentDetails,recordingDetails", id=",".join(ids[i:i + 50])))
+        for it in res.get("items", []):
+            sn, st = it.get("snippet", {}), it.get("status", {})
+            thumbs = sn.get("thumbnails", {})
+            thumb = next((thumbs[k]["url"] for k in ("maxres", "standard", "high", "medium", "default") if k in thumbs), None)
+            out.append({
+                "id": it["id"],
+                "title": sn.get("title") or it["id"],
+                "privacy": st.get("privacyStatus"),
+                "upload_status": st.get("uploadStatus"),
+                "duration": _iso_duration(it.get("contentDetails", {}).get("duration", "")),
+                "recorded": (it.get("recordingDetails") or {}).get("recordingDate") or sn.get("publishedAt"),
+                "thumb": thumb,
+            })
+    return out
+
+
+def my_playlists() -> list[dict]:
+    return [{"id": p["id"], "title": p["snippet"]["title"]}
+            for p in _pages(_service().playlists().list, part="snippet", mine=True)]
+
+
+def playlist_items(playlist_id: str) -> list[tuple[str, str]]:
+    """[(playlist item id, video id)]"""
+    return [(it["id"], it["contentDetails"]["videoId"])
+            for it in _pages(_service().playlistItems().list, part="contentDetails", playlistId=playlist_id)]
+
+
 def delete_video(video_id: str) -> None:
     """Permanently deletes a video from the channel."""
     _call(_service().videos().delete(id=video_id))

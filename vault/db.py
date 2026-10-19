@@ -65,6 +65,27 @@ CREATE TABLE IF NOT EXISTS tombstones (
     deleted_at  TEXT NOT NULL
 );
 
+-- Face identification (all on this PC, see faces.py). One row per person per clip;
+-- persons are groups of faces of the same person (named, merged or hidden by the user).
+CREATE TABLE IF NOT EXISTS persons (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT,
+    cover_face INTEGER,              -- faces.id shown as the person's picture
+    hidden     INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS faces (
+    id        INTEGER PRIMARY KEY,
+    video_id  INTEGER NOT NULL,
+    person_id INTEGER,
+    t         REAL,                 -- seconds into the clip (best view of the face)
+    score     REAL,                 -- detection confidence x sharpness
+    size      INTEGER,              -- face width in the 720p preview, px
+    embedding BLOB NOT NULL         -- 128 x float32, L2-normalised
+);
+CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
+CREATE INDEX IF NOT EXISTS idx_faces_video ON faces(video_id);
+
 -- Web Push subscriptions (one per phone/browser that turned notifications on)
 CREATE TABLE IF NOT EXISTS push_subs (
     endpoint   TEXT PRIMARY KEY,
@@ -102,6 +123,16 @@ def init() -> None:
         c.execute("ALTER TABLE videos ADD COLUMN lon REAL")
         c.execute("ALTER TABLE videos ADD COLUMN place TEXT")
         c.execute("ALTER TABLE videos ADD COLUMN geo_checked INTEGER NOT NULL DEFAULT 0")
+    if "faces_checked" not in cols:
+        # 1 once faces.py has looked for faces in the preview
+        c.execute("ALTER TABLE videos ADD COLUMN faces_checked INTEGER NOT NULL DEFAULT 0")
+    if "size" not in {r["name"] for r in c.execute("PRAGMA table_info(faces)")}:
+        c.execute("ALTER TABLE faces ADD COLUMN size INTEGER")
+    if "favorite" not in cols:
+        c.execute("ALTER TABLE videos ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+    if "privacy" not in cols:
+        # For videos found on YouTube (uploaded outside the vault): private / unlisted / public
+        c.execute("ALTER TABLE videos ADD COLUMN privacy TEXT")
     c.commit()
 
 

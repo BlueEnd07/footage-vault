@@ -43,9 +43,14 @@
       <button class="btn" id="renameAlbum">Rename</button>
       <button class="btn danger" id="deleteAlbum">Delete album</button>
       <button class="btn primary" id="saveEvent" hidden>Save as album</button>
+      <button class="btn primary" id="namePerson" hidden>Add name</button>
+      <button class="btn" id="mergePerson" hidden>Same person as…</button>
+      <button class="btn" id="hidePerson" hidden>Hide</button>
     </div>
+    <div id="personFaces" class="person-faces" hidden></div>
     <nav class="filters" id="filters">
       <button class="chip active" data-filter="all">All</button>
+      <button class="chip" data-filter="fav">♥ Favourites <span id="nFav"></span></button>
       <button class="chip" data-filter="progress">In progress <span id="nProgress"></span></button>
       <button class="chip" data-filter="phone">Safe to delete from phone <span id="nPhone"></span></button>
       <button class="chip" data-filter="problems">Problems <span id="nProblems"></span></button>
@@ -60,6 +65,10 @@
 
   <!-- Albums view -->
   <section id="albumsView" hidden>
+    <div id="peopleBlock">
+      <div class="albums-head"><h2>People</h2><span class="muted" id="peopleNote"></span></div>
+      <div id="peopleRow" class="people-row"></div>
+    </div>
     <div id="eventsBlock">
       <div class="albums-head"><h2>Events</h2><span class="muted">Clips less than 3 hours apart, grouped automatically</span></div>
       <div id="eventGrid" class="album-grid"></div>
@@ -82,6 +91,7 @@
   <!-- Selection bar -->
   <div id="selBar" class="sel-bar" hidden>
     <span id="selCount">0 selected</span>
+    <button class="btn" id="selFav" title="Favourite">♥</button>
     <button class="btn primary" id="selAddAlbum">Add to album</button>
     <button class="btn" id="selRemoveAlbum" hidden>Remove from album</button>
     <button class="btn danger" id="selDelete">Delete</button>
@@ -90,10 +100,37 @@
 
   <!-- Player -->
   <div id="viewer" class="viewer" hidden>
-    <button class="close" id="viewerClose" aria-label="Close">✕</button>
-    <div class="stage"><video id="player" controls playsinline preload="metadata"></video>
-      <div id="noPreview" class="no-preview" hidden>Preparing preview…</div></div>
+    <div class="v-main">
+      <header class="v-top">
+        <button class="v-icon" id="viewerClose" aria-label="Back">←</button>
+        <div class="v-title"><div id="vDate"></div><div id="vSub"></div></div>
+        <a class="v-icon" id="vYt" target="_blank" rel="noopener" title="Open on YouTube" aria-label="Open on YouTube">▶</a>
+      </header>
+      <div class="stage" id="stage">
+        <video id="player" controls playsinline preload="metadata"></video>
+        <iframe id="ytFrame" hidden allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+        <div id="noPreview" class="no-preview" hidden>Preparing preview…</div>
+        <button class="v-nav prev" id="vPrev" aria-label="Previous">‹</button>
+        <button class="v-nav next" id="vNext" aria-label="Next">›</button>
+      </div>
+      <nav class="v-bar">
+        <button id="vFav"><span class="i" id="vFavIcon">♡</span><span>Favourite</span></button>
+        <button id="vInfo"><span class="i">ⓘ</span><span>Info</span></button>
+        <button id="vAlbum"><span class="i">＋</span><span>Add to</span></button>
+        <button id="vDelete"><span class="i">🗑</span><span>Delete</span></button>
+      </nav>
+    </div>
     <aside class="details" id="details"></aside>
+  </div>
+
+  <!-- Person picker (merge) -->
+  <div id="peoplePicker" class="sheet" hidden>
+    <div class="sheet-body">
+      <button class="close" data-close="peoplePicker" aria-label="Close">✕</button>
+      <h2>Same person as…</h2>
+      <p class="muted">Pick who this really is. Their clips are combined.</p>
+      <div id="peoplePickerList" class="people-row wrap"></div>
+    </div>
   </div>
 
   <!-- Album picker -->
@@ -148,6 +185,11 @@
           <button class="btn primary" id="connectBtn">Connect YouTube</button>
           <button class="btn pc-only" id="disconnectBtn" hidden>Disconnect</button>
         </div>
+        <div class="row">
+          <button class="btn" id="ytSyncBtn">Sync from YouTube</button>
+          <span class="muted" id="ytSyncState"></span>
+        </div>
+        <p class="muted" style="font-size:13px">Brings in videos you uploaded to YouTube directly, and your playlists as albums. Runs by itself every 30 minutes.</p>
         <div id="pasteBox" class="paste-box" hidden>
           <ol>
             <li>In the Google page that opened, pick your channel's account and tap <b>Allow</b>.</li>
