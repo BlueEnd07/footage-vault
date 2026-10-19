@@ -21,6 +21,8 @@ DEFAULTS = {
     "port": 8765,
     "delete_after_days": 3,  # grace period after YouTube finishes processing
     "pin": None,  # required for devices other than this PC (e.g. the phone)
+    "watch_folders": [],  # [{"path": ..., "source": "phone" | "pc"}], checked every 15 s
+    "autostart_initialized": False,
 }
 
 

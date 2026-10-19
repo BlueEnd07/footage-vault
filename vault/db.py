@@ -37,6 +37,32 @@ CREATE TABLE IF NOT EXISTS videos (
 );
 CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
 CREATE INDEX IF NOT EXISTS idx_videos_recorded ON videos(recorded_at);
+
+-- Albums mirror private YouTube playlists. Changes are made here first and
+-- synced by the worker (title_synced / item_id / removed / deleted).
+CREATE TABLE IF NOT EXISTS albums (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,
+    playlist_id  TEXT,
+    title_synced INTEGER NOT NULL DEFAULT 0,
+    deleted      INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS album_videos (
+    album_id INTEGER NOT NULL,
+    video_id INTEGER NOT NULL,
+    item_id  TEXT,                       -- YouTube playlistItem id once synced
+    removed  INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (album_id, video_id)
+);
+
+-- Web Push subscriptions (one per phone/browser that turned notifications on)
+CREATE TABLE IF NOT EXISTS push_subs (
+    endpoint   TEXT PRIMARY KEY,
+    data       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 _local = threading.local()
@@ -53,7 +79,16 @@ def conn() -> sqlite3.Connection:
 
 
 def init() -> None:
-    conn().executescript(SCHEMA)
+    c = conn()
+    c.executescript(SCHEMA)
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(videos)")}
+    if "sync_path" not in cols:
+        # The file in a phone-sync folder; the vault works on its own linked copy in `path`.
+        c.execute("ALTER TABLE videos ADD COLUMN sync_path TEXT")
+    if "phone_cleared_at" not in cols:
+        # Set once the phone's copy is gone (Free up space, deleted on the phone, or marked by hand).
+        c.execute("ALTER TABLE videos ADD COLUMN phone_cleared_at TEXT")
+    c.commit()
 
 
 def rows(sql: str, args=()) -> list[dict]:

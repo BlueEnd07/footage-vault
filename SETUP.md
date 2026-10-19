@@ -37,27 +37,102 @@ This gives the app permission to upload to your channel. It's free.
 
 ## 3. Start the app
 
-Double-click **`start.bat`**. The first run takes a minute to install. The app opens in your browser at
-http://localhost:8765.
+Double-click **`start.bat`**. The first run takes a minute to install. After that, Footage Vault runs as a
+**tray icon** (bottom-right, near the clock; it may be hidden under **^**). There's no window to keep open.
 
-- Click **⚙ → Connect YouTube** and sign in with the channel's Google account.
+- **Left-click** the icon to open the app. **Right-click** it to see upload status, **Pause uploads**,
+  turn **Start with Windows** on or off, or **Quit**.
+- It starts with Windows automatically. The PC stays awake while an upload is running.
+- First time: click **⚙ → Connect YouTube** and sign in with the channel's Google account.
+  You can do this from the phone too. After you tap **Allow**, Google ends on a "This site can't be reached" page.
+  Copy that page's address and paste it into the box Footage Vault shows.
   - You'll see **"Google hasn't verified this app"**. That's expected because it's your own app.
-    Click **Advanced → Go to Footage Vault (unsafe)**, then allow access.
-- Keep the black `start.bat` window open while using it. Closing it stops the app and pauses uploads.
+    Click **Continue** (or **Advanced → Go to Footage Vault**), tick the permission box, then click **Continue**.
+  - If the app says **Reconnect YouTube**, click it. That happens when the app needs a new permission
+    (albums need one), or every 7 days while the Google project is in Testing mode.
 
-## 4. Use it from your phone
+## 4. Phone app with Tailscale (works anywhere, installable, notifications)
 
-1. Phone and PC must be on the **same Wi-Fi**.
-2. On the PC, open **⚙ Settings**. It shows an address like `http://192.168.1.81:8765` and a PIN.
-3. Open that address in your phone's browser and enter the PIN.
-   Tip: add it to your home screen so it works like an app.
-4. Tap **＋ Add videos** and pick videos from your gallery. **Keep the page open** until sending finishes.
-5. When a video shows **"✓ Safely on YouTube. You can delete … from your phone"**, delete it
-   from your phone yourself. The **Safe to delete from phone** filter lists them all.
+Tailscale gives your phone a private, secure (https) address for the PC that works on Wi-Fi or mobile data.
+Phones only allow installing a web app and getting its notifications over https.
 
-The first time, Windows may ask whether Python can use the network. Allow it on **Private networks**.
-If the phone can't connect, check that your Wi-Fi network is set to **Private** in Windows settings.
-Some office Wi-Fi networks block devices from reaching each other.
+**One time, in the Tailscale admin page:**
+1. Open https://login.tailscale.com/admin/dns and sign in.
+2. Make sure **MagicDNS** is on.
+3. Under **HTTPS Certificates**, click **Enable HTTPS**.
+4. Tell Claude it's on. Claude runs `tailscale serve --bg 8765` on the PC. That one command publishes the vault at
+   `https://<your-pc>.<your-tailnet>.ts.net` (also shown in ⚙ Settings), reachable only from your own Tailscale devices.
+
+**On the phone:**
+1. Install **Tailscale** from the Play Store, sign in with the same account and switch it on.
+2. Open the https address in **Chrome** and enter the PIN (shown in ⚙ Settings on the PC).
+3. Tap **Install** in the banner, or use **⋮ → Add to Home screen → Install**. Footage Vault now has its own app icon.
+4. In the app, open **⚙ → Turn on notifications** and allow them. Use **Send a test** to check.
+
+You'll get a notification when:
+- videos arrive from the phone
+- videos are **safe to delete from your phone**
+- something failed
+- the daily YouTube limit is reached
+- the YouTube sign-in needs renewing
+
+## 5. Automatic phone backup, Wi-Fi only (Syncthing)
+
+The app can't read your gallery in the background, so a small free sync app does that part.
+It copies new camera videos to the PC **only on Wi-Fi**, and the vault picks them up from there.
+
+**PC:**
+1. Install **Syncthing** for Windows from https://syncthing.net/downloads/ (use "Syncthing Windows Setup"),
+   then open its web page at http://127.0.0.1:8384.
+2. Make an empty folder for phone videos, e.g. `C:\Users\Keus Automation\Videos\Phone`.
+
+**Phone (Android):**
+1. Install **Syncthing-Fork** from the Play Store or F-Droid. It's the maintained Android version of Syncthing.
+2. In Syncthing-Fork: **Settings → Run conditions** →
+   - turn on **Run only when connected to Wi-Fi**
+   - turn off **Run on mobile data**
+3. **Devices → ＋**: scan the PC's QR code. On the PC page, click **Actions → Show ID**. Accept the phone on the PC.
+4. **Folders → ＋**:
+   - Folder path: your camera folder, usually `DCIM/Camera`
+   - **Folder type: Send & Receive**. This lets the **Free up space** button delete videos from the phone.
+   - Share it with the PC.
+   - Optional safety net: **File versioning → Trash Can, clean out after 7 days**. Videos deleted this way
+     stay in a hidden `.stversions` folder for a week before the space is freed.
+   - Open the folder's **Ignore patterns** and paste these, so only videos are copied:
+     ```
+     (?i)!*.mp4
+     (?i)!*.mov
+     (?i)!*.3gp
+     (?i)!*.mkv
+     *
+     ```
+
+**Back on the PC:**
+1. In Syncthing, accept the shared folder.
+   - Set its path to the folder you made, e.g. `C:\Users\Keus Automation\Videos\Phone`.
+   - **Folder type: Send & Receive**. Footage Vault only deletes files here when you tap **Free up space**.
+2. In Footage Vault: **⚙ → Watched folders → ＋ Phone sync folder**, and paste that same path.
+
+**How it fits together:**
+- You record → you get home to Wi-Fi → Syncthing copies the video to the PC → the vault adds it → it's uploaded to YouTube.
+- You get a notification: **"Safe to delete from your phone."**
+- Open the app and tap **Free up space**. It re-checks every video against YouTube, then deletes them from
+  the sync folder on the PC. Syncthing deletes them on the phone at its next Wi-Fi sync. Photos are never touched.
+- You can also delete videos on the phone yourself. The vault keeps its own copy as soon as a video arrives,
+  so deleting it on the phone at any point can't break an upload.
+- **Don't delete or move files in the PC sync folder by hand.** With Send & Receive, that would delete them on the phone too.
+
+### Manual upload (any time, no Syncthing needed)
+
+In the app, tap **＋** and pick videos. On the same Wi-Fi you can also use the local address shown in
+⚙ Settings (e.g. `http://192.168.1.81:8765`). Keep the page open until sending finishes.
+
+## Albums
+
+- In the app, tap **Select** (or long-press a video), pick videos, then choose **Add to album**.
+- You can also open a video and tap **＋ Album**.
+- Every album is also a **private playlist** on your YouTube channel. Renaming or deleting an album
+  does the same to the playlist. Deleting an album never deletes videos.
 
 ## How deleting works
 
@@ -77,14 +152,17 @@ Some office Wi-Fi networks block devices from reaching each other.
 - **Upload limits:** Google limits how many uploads a day the free API allows. When the limit is reached,
   the app pauses and continues automatically after the daily reset (around 12:30 PM India time).
 - **Copyright claims:** songs or music in a video can still get claimed by YouTube, even when it's private.
-- If the PC sleeps, uploads pause. They resume when it wakes up.
+- The PC stays awake while an upload is running. If it's shut down, or sleeps because the lid is closed,
+  uploads pause and continue when it's back.
 - An upload interrupted by closing the app starts again from the beginning next time.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `data\vault.db` | Library database (dates, YouTube IDs, status) |
+| `data\vault.db` | Library database (dates, YouTube IDs, albums, status) |
+| `data\vault.log` | Log file. Look here if something goes wrong |
+| `data\vapid_private.pem` | Key used to send notifications (private) |
 | `data\previews\` | 720p copies used for playback in the app |
 | `data\thumbs\` | Thumbnails |
 | `data\incoming\` | Videos sent from the phone, kept until they're safely on YouTube |

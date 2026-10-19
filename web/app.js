@@ -1,15 +1,28 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const api = async (url, body) => {
+  const r = await fetch(url, body === undefined ? undefined
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.statusText);
+  return data;
+};
 
 let videos = [];
+let albums = [];
 let status = {};
-let filter = "all";
+let view = "photos";          // photos | albums
+let albumId = null;           // album being viewed in the photos view
+let filter = new URLSearchParams(location.search).get("filter") || "all";
+let selecting = false;
+const selected = new Set();
 let lastRendered = "";
 let openId = null;
 
 const IN_PROGRESS = new Set(["new", "queued", "uploading", "uploaded"]);
 const ON_YT = new Set(["on_youtube", "done"]);
 const PROBLEM = new Set(["failed", "hold"]);
+const onPhoneSafe = (v) => v.source === "phone" && ON_YT.has(v.status) && !v.phone_cleared_at;
 
 // ---------- formatting ----------
 const fmtDur = (s) => {
@@ -21,11 +34,12 @@ const fmtSize = (b) => b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixe
 const parseDate = (s) => new Date(s.replace(" ", "T"));
 const fmtDay = (d) => d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 const fmtMonth = (d) => d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+const albumIds = (v) => (v.albums ? String(v.albums).split(",").map(Number) : []);
 
 function statusText(v) {
   switch (v.status) {
     case "new": return "Preparing preview";
-    case "queued": return status.connected ? "Waiting to upload" : "Waiting — YouTube not connected";
+    case "queued": return status.connected ? (status.user_paused ? "Waiting — uploads paused" : "Waiting to upload") : "Waiting — YouTube not connected";
     case "uploading": return `Uploading to YouTube · ${Math.round(v.progress * 100)}%`;
     case "uploaded": return "Uploaded · YouTube is processing";
     case "on_youtube": {
@@ -39,10 +53,28 @@ function statusText(v) {
   return v.status;
 }
 
+// ---------- views ----------
+function setView(v, aid = null) {
+  view = v;
+  albumId = aid;
+  exitSelect();
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === (v === "photos" && aid ? "albums" : v)));
+  $("#photosView").hidden = v !== "photos";
+  $("#albumsView").hidden = v !== "albums";
+  $("#albumHeader").hidden = !aid;
+  $("#filters").hidden = !!aid;
+  window.scrollTo(0, 0);
+  lastRendered = "";
+  render();
+}
+document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
+$("#backToAlbums").onclick = () => setView("albums");
+
 // ---------- gallery ----------
 function visible() {
+  if (albumId) return videos.filter((v) => albumIds(v).includes(albumId));
   if (filter === "progress") return videos.filter((v) => IN_PROGRESS.has(v.status));
-  if (filter === "phone") return videos.filter((v) => v.source === "phone" && ON_YT.has(v.status));
+  if (filter === "phone") return videos.filter(onPhoneSafe);
   if (filter === "problems") return videos.filter((v) => PROBLEM.has(v.status));
   return videos;
 }
@@ -50,17 +82,13 @@ function visible() {
 function tile(v) {
   const hasThumb = v.status !== "new" || v.youtube_id;
   const prog = v.status === "uploading" ? `<div class="prog"><i style="width:${v.progress * 100}%"></i></div>` : "";
-  return `<button class="tile" data-id="${v.id}" title="${esc(v.name)} — ${esc(statusText(v))}">
+  return `<button class="tile${selected.has(v.id) ? " selected" : ""}" data-id="${v.id}" title="${esc(v.name)} — ${esc(statusText(v))}">
     ${hasThumb ? `<img loading="lazy" src="/media/thumbs/${v.id}.jpg" alt="">` : `<div class="ph">Preparing…</div>`}
-    <span class="dot s-${v.status}"></span><span class="dur">${fmtDur(v.duration)}</span>${prog}</button>`;
+    <span class="dot s-${v.status}"></span><span class="check"></span><span class="dur">${fmtDur(v.duration)}</span>${prog}</button>`;
 }
 
-function render() {
+function renderGallery() {
   const list = visible();
-  const key = filter + JSON.stringify(list) + status.connected;
-  if (key === lastRendered) return;
-  lastRendered = key;
-
   let html = "", month = "", day = "", open = false;
   for (const v of list) {
     const d = parseDate(v.recorded_at);
@@ -71,25 +99,204 @@ function render() {
   }
   if (open) html += "</div>";
   $("#gallery").innerHTML = html;
-  $("#empty").hidden = videos.length > 0;
+
+  const empty = $("#empty");
+  empty.hidden = list.length > 0;
+  empty.innerHTML = albumId ? `<p>This album is empty.</p><p class="muted">Go to <b>Videos</b>, tap <b>Select</b>, pick videos and choose <b>Add to album</b>.</p>`
+    : videos.length ? `<p class="muted">Nothing here.</p>`
+    : `<p>No videos yet.</p><p class="muted">Tap <b>＋</b> to add videos from this device${status.local ? ", or use <b>Import PC folder</b>" : ""}.</p>`;
 
   const n = (f) => videos.filter(f).length || "";
   $("#nProgress").textContent = n((v) => IN_PROGRESS.has(v.status));
-  $("#nPhone").textContent = n((v) => v.source === "phone" && ON_YT.has(v.status));
+  $("#nPhone").textContent = n(onPhoneSafe);
+  renderFreeBar();
   $("#nProblems").textContent = n((v) => PROBLEM.has(v.status));
+  document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.filter === filter));
 
+  if (albumId) {
+    const a = albums.find((x) => x.id === albumId);
+    if (!a) return setView("albums");
+    $("#albumTitle").textContent = a.name;
+  }
+}
+
+function renderAlbums() {
+  $("#albumGrid").innerHTML = albums.length ? albums.map((a) => `
+    <button class="album-card" data-album="${a.id}">
+      <div class="cover">${a.cover ? `<img loading="lazy" src="/media/thumbs/${a.cover}.jpg" alt="">` : "Empty"}</div>
+      <div class="name">${esc(a.name)}</div><div class="count">${a.count} video${a.count === 1 ? "" : "s"}</div>
+    </button>`).join("") : `<p class="muted">No albums yet.</p>`;
+}
+
+function render() {
+  const key = [view, albumId, filter, selecting, [...selected].join(), status.connected, status.user_paused,
+    JSON.stringify(videos), JSON.stringify(albums)].join("|");
+  if (key === lastRendered) return;
+  lastRendered = key;
+  if (view === "photos") renderGallery(); else renderAlbums();
   if (openId) renderDetails();
 }
 
-$("#gallery").addEventListener("click", (e) => {
-  const t = e.target.closest(".tile");
-  if (t) openViewer(+t.dataset.id);
+$("#albumGrid").addEventListener("click", (e) => {
+  const c = e.target.closest(".album-card");
+  if (c) setView("photos", +c.dataset.album);
 });
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
-  document.querySelectorAll(".chip").forEach((x) => x.classList.toggle("active", x === c));
   filter = c.dataset.filter;
+  history.replaceState(null, "", filter === "all" ? "/" : `/?filter=${filter}`);
   render();
 }));
+
+// ---------- selecting several videos ----------
+function enterSelect() { selecting = true; document.body.classList.add("selecting"); updateSelBar(); }
+function exitSelect() { selecting = false; selected.clear(); document.body.classList.remove("selecting"); updateSelBar(); lastRendered = ""; }
+function updateSelBar() {
+  $("#selBar").hidden = !selecting;
+  $("#selCount").textContent = `${selected.size} selected`;
+  $("#selAddAlbum").disabled = $("#selRemoveAlbum").disabled = !selected.size;
+  $("#selRemoveAlbum").hidden = !albumId;
+  $("#selectBtn").textContent = selecting ? "Done" : "Select";
+}
+$("#selectBtn").onclick = () => { if (view !== "photos") setView("photos"); selecting ? exitSelect() : enterSelect(); render(); };
+$("#selCancel").onclick = () => { exitSelect(); render(); };
+$("#selAddAlbum").onclick = () => openPicker([...selected]);
+$("#selRemoveAlbum").onclick = async () => {
+  await api(`/api/albums/${albumId}/remove`, { video_ids: [...selected] });
+  exitSelect(); refresh();
+};
+
+let pressTimer = null, longPressed = false;
+$("#gallery").addEventListener("pointerdown", (e) => {
+  const t = e.target.closest(".tile");
+  if (!t || selecting) return;
+  longPressed = false;
+  pressTimer = setTimeout(() => { longPressed = true; enterSelect(); toggleSel(+t.dataset.id); }, 500);
+});
+["pointerup", "pointerleave", "pointercancel", "scroll"].forEach((ev) =>
+  $("#gallery").addEventListener(ev, () => clearTimeout(pressTimer), { passive: true }));
+$("#gallery").addEventListener("contextmenu", (e) => { if (e.target.closest(".tile")) e.preventDefault(); });
+
+function toggleSel(id) {
+  selected.has(id) ? selected.delete(id) : selected.add(id);
+  document.querySelector(`.tile[data-id="${id}"]`)?.classList.toggle("selected", selected.has(id));
+  updateSelBar();
+}
+$("#gallery").addEventListener("click", (e) => {
+  const t = e.target.closest(".tile");
+  if (!t) return;
+  if (longPressed) { longPressed = false; return; }
+  if (selecting) toggleSel(+t.dataset.id); else openViewer(+t.dataset.id);
+});
+
+// ---------- album picker ----------
+let pickerVideos = [];
+function openPicker(videoIds) {
+  pickerVideos = videoIds;
+  $("#pickerTitle").textContent = videoIds.length > 1 ? `Add ${videoIds.length} videos to album` : "Albums";
+  $("#pickerName").value = "";
+  renderPicker();
+  $("#picker").hidden = false;
+}
+function renderPicker() {
+  const single = pickerVideos.length === 1 ? videos.find((v) => v.id === pickerVideos[0]) : null;
+  const inSet = new Set(single ? albumIds(single) : []);
+  $("#pickerList").innerHTML = albums.length ? albums.map((a) => `
+    <button class="picker-item${inSet.has(a.id) ? " in" : ""}" data-album="${a.id}">
+      ${a.cover ? `<img src="/media/thumbs/${a.cover}.jpg" alt="">` : `<span class="ph-sq"></span>`}
+      <span>${esc(a.name)}<br><span class="muted">${a.count} video${a.count === 1 ? "" : "s"}</span></span>
+      ${inSet.has(a.id) ? '<span class="tick">✓</span>' : ""}</button>`).join("")
+    : `<div class="muted">No albums yet. Create one below.</div>`;
+}
+$("#pickerList").addEventListener("click", async (e) => {
+  const b = e.target.closest(".picker-item");
+  if (!b) return;
+  const aid = +b.dataset.album;
+  const isIn = b.classList.contains("in");
+  await api(`/api/albums/${aid}/${isIn ? "remove" : "add"}`, { video_ids: pickerVideos });
+  await refresh();
+  if (pickerVideos.length > 1) { $("#picker").hidden = true; exitSelect(); render(); } else renderPicker();
+});
+$("#pickerNew").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("#pickerName").value.trim();
+  if (!name) return;
+  const { id } = await api("/api/albums", { name });
+  if (pickerVideos.length) await api(`/api/albums/${id}/add`, { video_ids: pickerVideos });
+  await refresh();
+  $("#pickerName").value = "";
+  if (pickerVideos.length > 1) { $("#picker").hidden = true; exitSelect(); render(); } else renderPicker();
+});
+$("#newAlbumBtn").onclick = async () => {
+  const name = prompt("Album name");
+  if (!name || !name.trim()) return;
+  const { id } = await api("/api/albums", { name });
+  await refresh();
+  setView("photos", id);
+};
+$("#renameAlbum").onclick = async () => {
+  const a = albums.find((x) => x.id === albumId);
+  const name = prompt("Rename album", a?.name);
+  if (!name || !name.trim()) return;
+  await api(`/api/albums/${albumId}/rename`, { name });
+  refresh();
+};
+$("#deleteAlbum").onclick = async () => {
+  if (!confirm("Delete this album? Its YouTube playlist is deleted too. The videos stay.")) return;
+  await api(`/api/albums/${albumId}/delete`, {});
+  await refresh();
+  setView("albums");
+};
+
+// ---------- free up space on the phone ----------
+function renderFreeBar() {
+  const list = videos.filter(onPhoneSafe);
+  const bytes = list.reduce((s, v) => s + v.size, 0);
+  const show = list.length > 0 && !albumId && (filter === "phone" || filter === "all");
+  $("#freeBar").hidden = !show;
+  if (!show) return;
+  $("#freeTitle").textContent = `${list.length} video${list.length === 1 ? "" : "s"} (${fmtSize(bytes)}) safely on YouTube`;
+  $("#freeSub").textContent = "You can remove them from your phone to free up space.";
+}
+
+const freeList = (rows) => `<ul class="free-list">${rows.slice(0, 200).map((r) =>
+  `<li><span>${esc(r.name)}</span><span>${parseDate(r.recorded_at).toLocaleDateString()} · ${fmtSize(r.size)}</span></li>`).join("")}
+  ${rows.length > 200 ? `<li class="muted">…and ${rows.length - 200} more</li>` : ""}</ul>`;
+
+async function openFreeSheet() {
+  $("#freeSheet").hidden = false;
+  $("#freeBody").innerHTML = '<p class="muted">Checking…</p>';
+  let d;
+  try { d = await api("/api/free-space"); } catch (e) { $("#freeBody").innerHTML = `<p class="note bad">${esc(e.message)}</p>`; return; }
+  let html = "";
+  if (d.synced.length) {
+    html += `<section><p><b>${d.synced.length} video${d.synced.length === 1 ? "" : "s"} · ${fmtSize(d.synced_bytes)}</b> synced by Syncthing.</p>
+      <p class="muted">They'll be deleted from your phone the next time Syncthing syncs on Wi-Fi. They stay on YouTube in full
+      quality and in Footage Vault as 720p previews. Each one is checked against YouTube again first.</p>
+      ${freeList(d.synced)}<button class="btn primary" id="freeGo">Delete from phone · free ${fmtSize(d.synced_bytes)}</button></section>`;
+  }
+  if (d.manual.length) {
+    html += `<section><p><b>${d.manual.length} video${d.manual.length === 1 ? "" : "s"}</b> you added by hand (＋). The app can't delete these, so delete them in your phone's Gallery yourself:</p>
+      ${freeList(d.manual)}<button class="btn" id="freeMark">I've deleted these</button></section>`;
+  }
+  $("#freeBody").innerHTML = html || '<p class="muted">Nothing to free up right now.</p>';
+  const go = $("#freeGo");
+  if (go) go.onclick = async () => {
+    go.disabled = true; go.textContent = "Checking with YouTube…";
+    try {
+      const r = await api("/api/free-space", {});
+      $("#freeBody").innerHTML = `<p class="note good">✓ ${r.freed} video${r.freed === 1 ? "" : "s"} (${fmtSize(r.bytes)}) will be removed from your phone at the next Wi-Fi sync.</p>` +
+        (r.kept.length ? `<p class="note bad">Kept ${r.kept.length} because YouTube's copy didn't check out: ${r.kept.map(esc).join(", ")}</p>` : "");
+    } catch (e) { $("#freeBody").innerHTML = `<p class="note bad">${esc(e.message)}</p>`; }
+    refresh();
+  };
+  const mark = $("#freeMark");
+  if (mark) mark.onclick = async () => {
+    if (!confirm(`Only do this after deleting them from your phone. Mark ${d.manual.length} videos as deleted?`)) return;
+    await api("/api/free-space/mark", { video_ids: d.manual.map((r) => r.id) });
+    await refresh(); openFreeSheet();
+  };
+}
+$("#freeBtn").onclick = openFreeSheet;
 
 // ---------- viewer ----------
 function openViewer(id) {
@@ -109,19 +316,29 @@ function closeViewer() {
   $("#viewer").hidden = true;
 }
 $("#viewerClose").onclick = closeViewer;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeViewer(); $("#settings").hidden = true; } });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#picker").hidden) $("#picker").hidden = true;
+  else if (!$("#viewer").hidden) closeViewer();
+  else if (!$("#settings").hidden) $("#settings").hidden = true;
+  else if (selecting) { exitSelect(); render(); }
+});
 
 function renderDetails() {
   const v = videos.find((x) => x.id === openId);
   if (!v) return closeViewer();
   const d = parseDate(v.recorded_at);
   let note = "";
-  if (v.source === "phone" && ON_YT.has(v.status))
-    note = `<div class="note good">✓ Safely on YouTube. You can delete <b>${esc(v.name)}</b> from your phone.</div>`;
+  if (onPhoneSafe(v))
+    note = `<div class="note good">✓ Safely on YouTube. You can delete <b>${esc(v.name)}</b> from your phone${v.synced ? " (or use <b>Free up space</b>)" : ""}.</div>`;
+  else if (v.source === "phone" && v.phone_cleared_at)
+    note = `<div class="note good">✓ On YouTube and removed from your phone.</div>`;
   else if (v.source === "phone" && !PROBLEM.has(v.status))
     note = `<div class="note">Keep this video on your phone until it says it's safe to delete.</div>`;
   if (v.error) note += `<div class="note bad">${esc(v.error)}</div>`;
 
+  const chips = albumIds(v).map((id) => albums.find((a) => a.id === id)).filter(Boolean)
+    .map((a) => `<button class="album-chip" data-goto="${a.id}">${esc(a.name)}</button>`).join("");
   const yt = v.youtube_id ? `<a class="btn" target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=${esc(v.youtube_id)}">Watch on YouTube (full quality)</a>
     <a class="btn" target="_blank" rel="noopener" href="https://studio.youtube.com/video/${esc(v.youtube_id)}/edit">YouTube Studio</a>` : "";
   const retry = PROBLEM.has(v.status) ? `<button class="btn primary" id="retryBtn">${v.status === "hold" ? "Re-check" : "Retry"}</button>` : "";
@@ -132,10 +349,13 @@ function renderDetails() {
       <dt>Resolution</dt><dd>${v.width}×${v.height}</dd>
       <dt>Size</dt><dd>${fmtSize(v.size)}</dd>
       <dt>From</dt><dd>${v.source === "phone" ? "Phone" : "PC"}</dd></dl>
+    <div class="album-chips">${chips}<button class="album-chip" id="addToAlbum">＋ Album</button></div>
     ${note}<div class="row">${yt}${retry}</div>
     <p class="muted" style="margin-top:16px;font-size:13px">The player here uses a 720p copy kept on your PC.</p>`;
+  $("#addToAlbum").onclick = () => openPicker([v.id]);
+  $("#details").querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => { closeViewer(); setView("photos", +b.dataset.goto); });
   const rb = $("#retryBtn");
-  if (rb) rb.onclick = async () => { await fetch(`/api/videos/${v.id}/retry`, { method: "POST" }); refresh(); };
+  if (rb) rb.onclick = async () => { await api(`/api/videos/${v.id}/retry`, {}); refresh(); };
 }
 
 // ---------- sending files from this device (phone) ----------
@@ -195,58 +415,171 @@ window.addEventListener("beforeunload", (e) => { if (sending) { e.preventDefault
 $("#importBtn").onclick = async () => {
   const folder = prompt("Folder on this PC to import (subfolders included).\nOriginals go to the Recycle Bin after they're safely on YouTube.");
   if (!folder) return;
-  const r = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder }) });
-  if (!r.ok) alert((await r.json()).detail);
+  try { await api("/api/import", { folder }); } catch (e) { alert(e.message); }
   refresh();
 };
 
-$("#settingsBtn").onclick = () => { $("#settings").hidden = false; $("#deleteDays").value = status.delete_after_days; renderSettings(); };
-$("#settingsClose").onclick = () => { $("#settings").hidden = true; };
-$("#settings").addEventListener("click", (e) => { if (e.target.id === "settings") e.target.hidden = true; });
+$("#settingsBtn").onclick = () => { $("#settings").hidden = false; $("#deleteDays").value = status.delete_after_days; renderSettings(); renderPush(); };
+document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => { $("#" + b.dataset.close).hidden = true; });
+document.querySelectorAll(".sheet").forEach((s) => s.addEventListener("click", (e) => { if (e.target === s) s.hidden = true; }));
 $("#connectBtn").onclick = connect;
 $("#disconnectBtn").onclick = async () => {
   if (!confirm("Disconnect YouTube? Uploads pause until you connect again.")) return;
-  await fetch("/api/youtube/logout", { method: "POST" }); refresh();
+  await api("/api/youtube/logout", {}); refresh();
 };
-$("#saveDays").onclick = async () => {
-  await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ delete_after_days: +$("#deleteDays").value }) });
-  refresh();
-};
+$("#saveDays").onclick = async () => { await api("/api/settings", { delete_after_days: +$("#deleteDays").value }); refresh(); };
+
+async function addWatch(source) {
+  const msg = source === "phone"
+    ? "Folder on this PC that Syncthing copies your phone's videos into:"
+    : "Folder on this PC to keep watching for new videos:";
+  const folder = prompt(msg);
+  if (!folder) return;
+  try { await api("/api/watch", { folder, source }); } catch (e) { return alert(e.message); }
+  await refresh(); renderSettings();
+}
+$("#addWatchPhone").onclick = () => addWatch("phone");
+$("#addWatchPc").onclick = () => addWatch("pc");
+$("#watchList").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-unwatch]");
+  if (!b || !confirm("Stop watching this folder? Videos already added stay in the vault.")) return;
+  await api("/api/watch/remove", { folder: b.dataset.unwatch });
+  await refresh(); renderSettings();
+});
 
 async function connect() {
-  const r = await fetch("/api/youtube/login", { method: "POST" });
-  if (!r.ok) return alert((await r.json()).detail);
-  refresh();
+  // Open the tab first (synchronously) so phones don't block it as a popup.
+  const tab = window.open("about:blank", "_blank");
+  let url;
+  try { ({ url } = await api("/api/youtube/login", {})); } catch (e) { tab?.close(); return alert(e.message); }
+  if (tab) tab.location = url; else location.href = url;
+  if (!status.local) {
+    // Google can only return to the PC's own address, so on the phone the user pastes it back.
+    $("#settings").hidden = false;
+    renderSettings();
+    $("#pasteBox").hidden = false;
+    $("#pasteUrl").value = "";
+  }
 }
+$("#pasteBtn").onclick = async () => {
+  try { $("#pasteUrl").value = await navigator.clipboard.readText(); } catch { $("#pasteUrl").focus(); }
+};
+$("#pasteForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await api("/api/youtube/finish", { url: $("#pasteUrl").value }); }
+  catch (err) { return alert(err.message); }
+  $("#pasteBox").hidden = true;
+  channelName = null;
+  await refresh();
+  renderSettings();
+  alert("✓ YouTube connected");
+});
 
 let channelName = null;
 async function renderSettings() {
   $("#lanUrl").textContent = status.lan_url || "";
   $("#pin").textContent = status.pin || "";
   $("#connectBtn").hidden = status.connected;
+  $("#connectBtn").textContent = status.auth === "none" ? "Connect YouTube" : "Reconnect YouTube";
   $("#disconnectBtn").hidden = !status.connected;
   if (status.connected && channelName === null) {
-    channelName = (await (await fetch("/api/channel")).json()).title || "";
+    channelName = (await api("/api/channel")).title || "";
   }
   $("#ytState").textContent = !status.has_client_secret ? "Not set up yet: client_secret.json is missing (see SETUP.md)."
     : status.connected ? `Connected${channelName ? " to " + channelName : ""}. Uploads are private.`
-    : status.login_running ? "Finish signing in in the browser window that opened on the PC…"
+    : status.auth === "scope" ? "Reconnect needed: albums need one extra YouTube permission."
+    : status.auth === "expired" ? "Google sign-in ran out. Reconnect to continue uploading."
     : "Not connected.";
+
+  const ts = status.tailscale;
+  $("#tsBlock").innerHTML = !ts ? `<p class="muted">Tailscale isn't running on this PC.</p>`
+    : ts.https ? `<p class="muted">From anywhere (Tailscale). On your phone open this in Chrome, then <b>⋮ → Install app</b>:</p><div class="code">${esc(ts.url)}</div>`
+    : `<p class="muted">Tailscale is on, but HTTPS certificates are off. Turn them on (see SETUP.md) to install the app and get notifications on your phone.</p>`;
+
+  const wf = status.watch_folders || [];
+  $("#watchList").innerHTML = wf.length ? wf.map((f) => `<div class="watch-item"><span class="p">${esc(f.path)}</span>
+    <span class="tag">${f.source === "phone" ? "phone" : "PC"}</span>
+    <button class="btn" data-unwatch="${esc(f.path)}">Remove</button></div>`).join("") : `<p class="muted">None yet.</p>`;
 }
 
+// ---------- notifications + install ----------
+const pushSupported = "serviceWorker" in navigator && "PushManager" in window && window.isSecureContext;
+let swReg = null;
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").then((r) => { swReg = r; }).catch((e) => console.warn("SW", e));
+}
+const b64ToBytes = (s) => {
+  const raw = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+async function currentSub() {
+  if (!pushSupported) return null;
+  const reg = swReg || await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function renderPush() {
+  const st = $("#pushState");
+  ["#pushOn", "#pushOff", "#pushTest"].forEach((s) => { $(s).hidden = true; });
+  if (!pushSupported) {
+    st.innerHTML = "Notifications need the secure Tailscale address (https://…). Open Footage Vault from that address on your phone.";
+    return;
+  }
+  if (Notification.permission === "denied") {
+    st.textContent = "Notifications are blocked for this site. Allow them in the browser's site settings.";
+    return;
+  }
+  const sub = await currentSub().catch(() => null);
+  if (sub) {
+    st.innerHTML = '<span class="ok-text">On.</span> You\'ll get a notification when videos are safely on YouTube or something needs attention.';
+    $("#pushOff").hidden = $("#pushTest").hidden = false;
+  } else {
+    st.textContent = "Get notified when videos are safely on YouTube (so you can delete them from your phone) or if something needs attention.";
+    $("#pushOn").hidden = false;
+  }
+}
+$("#pushOn").onclick = async () => {
+  try {
+    if (await Notification.requestPermission() !== "granted") return renderPush();
+    const reg = swReg || await navigator.serviceWorker.ready;
+    const { key } = await api("/api/push/key");
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    await api("/api/push/subscribe", sub.toJSON());
+  } catch (e) { alert("Couldn't turn on notifications: " + e.message); }
+  renderPush();
+};
+$("#pushOff").onclick = async () => {
+  const sub = await currentSub();
+  if (sub) { await api("/api/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); }
+  renderPush();
+};
+$("#pushTest").onclick = async () => {
+  const { sent } = await api("/api/push/test", {});
+  if (!sent) alert("No device accepted the test. Try turning notifications off and on again.");
+};
+
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; renderBanner(); });
+window.addEventListener("appinstalled", () => { installPrompt = null; renderBanner(); });
+
+// ---------- banner ----------
 let importDismissed = "";
+let installDismissed = false;
 function renderBanner() {
   const b = $("#banner");
   let html = "", warn = false;
   const imp = status.import;
   if (status.local && !status.has_client_secret) {
-    html = "YouTube isn't set up yet. Follow <b>SETUP.md</b> in the footage-vault folder, then restart the app."; warn = true;
+    html = "YouTube isn't set up yet. Follow <b>SETUP.md</b> in the footage-vault folder."; warn = true;
   } else if (!status.connected) {
-    html = status.login_running ? "Finish Google sign-in in the browser window on the PC…"
-      : "YouTube is not connected. Videos are kept and will upload once it's connected." +
-        (status.local ? ' <button class="btn primary" id="bannerConnect">Connect YouTube</button>' : "");
+    html = status.auth === "scope" ? "Reconnect YouTube once so albums can create playlists. Uploads are paused until then."
+      : status.auth === "expired" ? "Google sign-in ran out (this happens every 7 days in Testing mode). Uploads are paused."
+      : status.auth === "offline" ? "No internet connection. Uploads continue when it's back."
+      : "YouTube is not connected. Videos are kept and will upload once it's connected.";
+    if (status.has_client_secret && status.auth !== "offline")
+      html += ` <button class="btn primary" id="bannerConnect">${status.auth === "none" ? "Connect" : "Reconnect"} YouTube</button>`;
     warn = true;
+  } else if (status.user_paused) {
+    html = "Uploads are paused (tray icon → Pause uploads).";
   } else if (status.paused_until) {
     html = `${esc(status.pause_reason)}. Uploads resume ${esc(status.paused_until)}.`; warn = true;
   }
@@ -255,6 +588,9 @@ function renderBanner() {
     html += (html ? "<br>" : "") + `Import finished: ${imp.added} added, ${imp.skipped} already in vault` +
       (imp.errors ? `, ${imp.errors} unreadable` : "") + ' <button class="btn" id="importOk">OK</button>';
   }
+  if (installPrompt && !installDismissed) {
+    html += (html ? "<br>" : "") + 'Install Footage Vault as an app? <button class="btn primary" id="installBtn">Install</button> <button class="btn" id="installNo">Not now</button>';
+  }
   b.innerHTML = html;
   b.hidden = !html;
   b.classList.toggle("warn", warn);
@@ -262,14 +598,19 @@ function renderBanner() {
   if (bc) bc.onclick = connect;
   const ok = $("#importOk");
   if (ok) ok.onclick = () => { importDismissed = imp.folder + imp.found; renderBanner(); };
+  const ib = $("#installBtn");
+  if (ib) ib.onclick = async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; renderBanner(); };
+  const inb = $("#installNo");
+  if (inb) inb.onclick = () => { installDismissed = true; renderBanner(); };
 }
 
 // ---------- polling ----------
 async function refresh() {
   try {
-    const [v, s] = await Promise.all([fetch("/api/videos"), fetch("/api/status")]);
+    const [v, a, s] = await Promise.all([fetch("/api/videos"), fetch("/api/albums"), fetch("/api/status")]);
     if (v.status === 401) return location.reload();
     videos = await v.json();
+    albums = await a.json();
     status = await s.json();
     document.body.classList.toggle("remote", !status.local);
     render();
@@ -277,5 +618,7 @@ async function refresh() {
     if (!$("#settings").hidden) renderSettings();
   } catch (e) { /* PC asleep or offline; try again next tick */ }
 }
+setView("photos");
 refresh();
 setInterval(refresh, 3000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });

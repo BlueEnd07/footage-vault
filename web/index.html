@@ -4,18 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111214">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <title>Footage Vault</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="top">
     <div class="brand">Footage Vault</div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-view="photos">Videos</button>
+      <button class="tab" data-view="albums">Albums</button>
+    </div>
     <div class="actions">
+      <button class="btn" id="selectBtn">Select</button>
       <label class="btn primary" title="Add videos from this device">
         <input id="fileInput" type="file" accept="video/*" multiple hidden>
-        <span>＋ Add videos</span>
+        <span>＋<span class="wide-only"> Add videos</span></span>
       </label>
-      <button class="btn pc-only" id="importBtn">Import PC folder</button>
+      <button class="btn pc-only wide-only" id="importBtn">Import PC folder</button>
       <button class="btn icon" id="settingsBtn" title="Settings">⚙</button>
     </div>
   </header>
@@ -23,17 +31,41 @@
   <div id="banner" class="banner" hidden></div>
   <div id="sendQueue" class="send-queue" hidden></div>
 
-  <nav class="filters">
-    <button class="chip active" data-filter="all">All</button>
-    <button class="chip" data-filter="progress">In progress <span id="nProgress"></span></button>
-    <button class="chip" data-filter="phone">Safe to delete from phone <span id="nPhone"></span></button>
-    <button class="chip" data-filter="problems">Problems <span id="nProblems"></span></button>
-  </nav>
+  <!-- Videos view -->
+  <section id="photosView">
+    <div id="albumHeader" class="album-header" hidden>
+      <button class="btn" id="backToAlbums">← Albums</button>
+      <h2 id="albumTitle"></h2>
+      <button class="btn" id="renameAlbum">Rename</button>
+      <button class="btn danger" id="deleteAlbum">Delete album</button>
+    </div>
+    <nav class="filters" id="filters">
+      <button class="chip active" data-filter="all">All</button>
+      <button class="chip" data-filter="progress">In progress <span id="nProgress"></span></button>
+      <button class="chip" data-filter="phone">Safe to delete from phone <span id="nPhone"></span></button>
+      <button class="chip" data-filter="problems">Problems <span id="nProblems"></span></button>
+    </nav>
+    <div id="freeBar" class="free-bar" hidden>
+      <div><b id="freeTitle"></b><div class="muted" id="freeSub"></div></div>
+      <button class="btn primary" id="freeBtn">Free up space</button>
+    </div>
+    <main id="gallery"></main>
+    <div id="empty" class="empty" hidden></div>
+  </section>
 
-  <main id="gallery"></main>
-  <div id="empty" class="empty" hidden>
-    <p>No videos yet.</p>
-    <p class="muted">Tap <b>＋ Add videos</b> on your phone, or use <b>Import PC folder</b> on this PC.</p>
+  <!-- Albums view -->
+  <section id="albumsView" hidden>
+    <div class="albums-head"><h2>Albums</h2><button class="btn primary" id="newAlbumBtn">＋ New album</button></div>
+    <div id="albumGrid" class="album-grid"></div>
+    <p class="muted albums-note">Each album is also a private playlist on your YouTube channel.</p>
+  </section>
+
+  <!-- Selection bar -->
+  <div id="selBar" class="sel-bar" hidden>
+    <span id="selCount">0 selected</span>
+    <button class="btn primary" id="selAddAlbum">Add to album</button>
+    <button class="btn" id="selRemoveAlbum" hidden>Remove from album</button>
+    <button class="btn" id="selCancel">Cancel</button>
   </div>
 
   <!-- Player -->
@@ -44,29 +76,83 @@
     <aside class="details" id="details"></aside>
   </div>
 
+  <!-- Album picker -->
+  <div id="picker" class="sheet" hidden>
+    <div class="sheet-body">
+      <button class="close" data-close="picker" aria-label="Close">✕</button>
+      <h2 id="pickerTitle">Add to album</h2>
+      <div id="pickerList" class="picker-list"></div>
+      <form id="pickerNew" class="row">
+        <input id="pickerName" placeholder="New album name" maxlength="150">
+        <button class="btn primary">Create</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Free up space -->
+  <div id="freeSheet" class="sheet" hidden>
+    <div class="sheet-body">
+      <button class="close" data-close="freeSheet" aria-label="Close">✕</button>
+      <h2>Free up space on your phone</h2>
+      <div id="freeBody"><p class="muted">Checking…</p></div>
+    </div>
+  </div>
+
   <!-- Settings -->
   <div id="settings" class="sheet" hidden>
     <div class="sheet-body">
-      <button class="close" id="settingsClose" aria-label="Close">✕</button>
+      <button class="close" data-close="settings" aria-label="Close">✕</button>
       <h2>Settings</h2>
       <section>
         <h3>YouTube</h3>
         <div id="ytState" class="muted"></div>
-        <div class="row pc-only">
+        <div class="row">
           <button class="btn primary" id="connectBtn">Connect YouTube</button>
-          <button class="btn" id="disconnectBtn" hidden>Disconnect</button>
+          <button class="btn pc-only" id="disconnectBtn" hidden>Disconnect</button>
+        </div>
+        <div id="pasteBox" class="paste-box" hidden>
+          <ol>
+            <li>In the Google page that opened, pick your channel's account and tap <b>Allow</b>.</li>
+            <li>It ends on a page saying <b>"This site can't be reached"</b>. That's expected.</li>
+            <li>Copy that page's address (<b>⋮ → Share → Copy</b>, or tap the address bar and copy), then paste it here:</li>
+          </ol>
+          <form id="pasteForm" class="row">
+            <input id="pasteUrl" placeholder="http://localhost:8765/oauth/callback?…" autocomplete="off">
+            <button type="button" class="btn" id="pasteBtn">Paste</button>
+            <button class="btn primary">Finish</button>
+          </form>
+        </div>
+      </section>
+      <section>
+        <h3>Notifications on this device</h3>
+        <p class="muted" id="pushState"></p>
+        <div class="row">
+          <button class="btn primary" id="pushOn" hidden>Turn on notifications</button>
+          <button class="btn" id="pushTest" hidden>Send a test</button>
+          <button class="btn" id="pushOff" hidden>Turn off</button>
         </div>
       </section>
       <section class="pc-only">
-        <h3>Use from your phone</h3>
-        <p class="muted">Phone and PC must be on the same Wi-Fi. Open this address in the phone's browser:</p>
+        <h3>Open on your phone</h3>
+        <div id="tsBlock"></div>
+        <p class="muted">At home on the same Wi-Fi you can also use:</p>
         <div class="code" id="lanUrl"></div>
         <p class="muted">PIN: <b id="pin" class="code-inline"></b></p>
       </section>
       <section class="pc-only">
+        <h3>Watched folders</h3>
+        <p class="muted">New videos in these folders are added automatically, e.g. the folder Syncthing copies
+          your phone's camera videos into.</p>
+        <div id="watchList"></div>
+        <div class="row">
+          <button class="btn" id="addWatchPhone">＋ Phone sync folder</button>
+          <button class="btn" id="addWatchPc">＋ PC folder</button>
+        </div>
+      </section>
+      <section class="pc-only">
         <h3>Deleting originals</h3>
-        <p class="muted">After YouTube finishes processing a video, its original file on this PC goes to the
-          Recycle Bin after this many days. Videos from your phone must be deleted from the phone by you.</p>
+        <p class="muted">After YouTube finishes processing a video, its file on this PC goes to the
+          Recycle Bin after this many days. Videos on your phone must be deleted from the phone by you.</p>
         <div class="row"><input id="deleteDays" type="number" min="0" max="365"> <span>days</span>
           <button class="btn" id="saveDays">Save</button></div>
       </section>

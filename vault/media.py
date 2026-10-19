@@ -19,14 +19,14 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def fingerprint(path: Path) -> str:
-    """Fast duplicate check: size + first and last 4 MB."""
+    """Fast duplicate check: size + first and last 4 MB (the whole file if it's small)."""
     size = path.stat().st_size
     h = hashlib.sha256(str(size).encode())
     with open(path, "rb") as f:
         h.update(f.read(4 << 20))
         if size > 8 << 20:
             f.seek(-(4 << 20), 2)
-            h.update(f.read())
+        h.update(f.read())
     return h.hexdigest()
 
 

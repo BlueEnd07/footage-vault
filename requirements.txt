@@ -4,3 +4,6 @@ google-api-python-client>=2.140
 google-auth-oauthlib>=1.2
 send2trash>=1.8
 tzdata
+pywebpush>=2.0
+pystray>=0.19
+pillow>=10.0

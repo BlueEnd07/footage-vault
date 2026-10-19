@@ -1,18 +1,55 @@
+"""Starts Footage Vault in the system tray.  `python run.py --console` runs it in a console instead."""
+import logging
+import socket
+import sys
 import threading
 import webbrowser
 
-import uvicorn
+from vault.config import DATA, load_settings, save_settings
 
-from vault.config import load_settings
-from vault.main import app, lan_ip
+# pythonw.exe (no console) has no stdout/stderr; send them to a log file.
+if sys.stdout is None or sys.stderr is None:
+    sys.stdout = sys.stderr = open(DATA / "vault.log", "a", encoding="utf-8", buffering=1)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                    handlers=[logging.FileHandler(DATA / "vault.log", encoding="utf-8")])
 
-if __name__ == "__main__":
+import uvicorn  # noqa: E402
+
+from vault.main import app, lan_ip  # noqa: E402
+
+
+def already_running(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def main():
     s = load_settings()
     port = s["port"]
-    print("\n  Footage Vault is running")
-    print(f"  On this PC:  http://localhost:{port}")
-    print(f"  On phone:    http://{lan_ip()}:{port}   (same Wi-Fi, PIN {s['pin']})")
-    print("  Keep this window open. Close it to stop.\n")
-    threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
-    # 0.0.0.0 so the phone on the same Wi-Fi can reach it; other devices need the PIN.
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    url = f"http://localhost:{port}"
+    if already_running(port):
+        webbrowser.open(url)  # second launch just opens the app
+        return
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning", log_config=None)
+    server = uvicorn.Server(config)
+
+    if "--console" in sys.argv:
+        print(f"\n  Footage Vault: {url}   phone (same Wi-Fi): http://{lan_ip()}:{port}  PIN {s['pin']}\n")
+        server.run()
+        return
+
+    from vault import tray
+    if not s.get("autostart_initialized"):  # first run: start with Windows by default
+        tray.set_autostart(True)
+        s["autostart_initialized"] = True
+        save_settings(s)
+        threading.Timer(2, lambda: webbrowser.open(url)).start()
+
+    threading.Thread(target=server.run, daemon=True, name="server").start()
+    tray.run(server, port)
+
+
+if __name__ == "__main__":
+    main()
