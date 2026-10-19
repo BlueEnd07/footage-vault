@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111214">
+  <title>Footage Vault</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">Footage Vault</div>
+    <div class="actions">
+      <label class="btn primary" title="Add videos from this device">
+        <input id="fileInput" type="file" accept="video/*" multiple hidden>
+        <span>＋ Add videos</span>
+      </label>
+      <button class="btn pc-only" id="importBtn">Import PC folder</button>
+      <button class="btn icon" id="settingsBtn" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+  <div id="sendQueue" class="send-queue" hidden></div>
+
+  <nav class="filters">
+    <button class="chip active" data-filter="all">All</button>
+    <button class="chip" data-filter="progress">In progress <span id="nProgress"></span></button>
+    <button class="chip" data-filter="phone">Safe to delete from phone <span id="nPhone"></span></button>
+    <button class="chip" data-filter="problems">Problems <span id="nProblems"></span></button>
+  </nav>
+
+  <main id="gallery"></main>
+  <div id="empty" class="empty" hidden>
+    <p>No videos yet.</p>
+    <p class="muted">Tap <b>＋ Add videos</b> on your phone, or use <b>Import PC folder</b> on this PC.</p>
+  </div>
+
+  <!-- Player -->
+  <div id="viewer" class="viewer" hidden>
+    <button class="close" id="viewerClose" aria-label="Close">✕</button>
+    <div class="stage"><video id="player" controls playsinline preload="metadata"></video>
+      <div id="noPreview" class="no-preview" hidden>Preparing preview…</div></div>
+    <aside class="details" id="details"></aside>
+  </div>
+
+  <!-- Settings -->
+  <div id="settings" class="sheet" hidden>
+    <div class="sheet-body">
+      <button class="close" id="settingsClose" aria-label="Close">✕</button>
+      <h2>Settings</h2>
+      <section>
+        <h3>YouTube</h3>
+        <div id="ytState" class="muted"></div>
+        <div class="row pc-only">
+          <button class="btn primary" id="connectBtn">Connect YouTube</button>
+          <button class="btn" id="disconnectBtn" hidden>Disconnect</button>
+        </div>
+      </section>
+      <section class="pc-only">
+        <h3>Use from your phone</h3>
+        <p class="muted">Phone and PC must be on the same Wi-Fi. Open this address in the phone's browser:</p>
+        <div class="code" id="lanUrl"></div>
+        <p class="muted">PIN: <b id="pin" class="code-inline"></b></p>
+      </section>
+      <section class="pc-only">
+        <h3>Deleting originals</h3>
+        <p class="muted">After YouTube finishes processing a video, its original file on this PC goes to the
+          Recycle Bin after this many days. Videos from your phone must be deleted from the phone by you.</p>
+        <div class="row"><input id="deleteDays" type="number" min="0" max="365"> <span>days</span>
+          <button class="btn" id="saveDays">Save</button></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
