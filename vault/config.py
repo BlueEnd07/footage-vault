@@ -23,6 +23,7 @@ DEFAULTS = {
     "pin": None,  # required for devices other than this PC (e.g. the phone)
     "watch_folders": [],  # [{"path": ..., "source": "phone" | "pc"}], checked every 15 s
     "autostart_initialized": False,
+    "event_gap_hours": 3,  # clips closer together than this form one event
 }
 
 

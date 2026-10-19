@@ -40,20 +40,23 @@ def keep_awake(on: bool) -> None:
 
 def register(path: Path, source: str, fallback_time: datetime | None = None,
              name: str | None = None, sync_path: Path | None = None) -> int | None:
-    """Adds a video to the library. Returns its id, or None if it's a duplicate."""
+    """Adds a video to the library. Returns its id, or None if it's a duplicate
+    (or a video that was deleted forever)."""
     fp = media.fingerprint(path)
-    if db.row("SELECT id FROM videos WHERE fingerprint=?", (fp,)):
+    if db.row("SELECT id FROM videos WHERE fingerprint=?", (fp,)) or \
+            db.row("SELECT 1 FROM tombstones WHERE fingerprint=?", (fp,)):
         return None
     meta = media.probe(path)
     recorded = meta["recorded"] or fallback_time or datetime.fromtimestamp(path.stat().st_mtime)
+    place = media.place_name(meta["lat"], meta["lon"]) if meta["lat"] is not None else None
     try:
         return db.run(
             """INSERT INTO videos (fingerprint, name, source, path, size, duration, width, height,
-                                   recorded_at, imported_at, sync_path)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                   recorded_at, imported_at, sync_path, lat, lon, place, geo_checked)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
             (fp, name or path.name, source, str(path), path.stat().st_size, meta["duration"],
              meta["width"], meta["height"], recorded.strftime("%Y-%m-%d %H:%M:%S"), db.now(),
-             str(sync_path) if sync_path else None))
+             str(sync_path) if sync_path else None, meta["lat"], meta["lon"], place))
     except sqlite3.IntegrityError:
         return None
 
@@ -61,7 +64,15 @@ def register(path: Path, source: str, fallback_time: datetime | None = None,
 def _register_synced(p: Path) -> int | None:
     """A file in a phone-sync folder. The sync app deletes it here when it's deleted on the
     phone, so the vault keeps its own hard link (or copy) in data/incoming to work on."""
-    if db.row("SELECT id FROM videos WHERE fingerprint=?", (media.fingerprint(p),)):
+    fp = media.fingerprint(p)
+    if db.row("SELECT 1 FROM tombstones WHERE fingerprint=?", (fp,)):
+        return None  # deleted forever; don't bring it back
+    existing = db.row("SELECT id, source, sync_path FROM videos WHERE fingerprint=?", (fp,))
+    if existing:
+        # Same video sent earlier with ＋: remember where its phone copy now syncs to,
+        # so "Free up space" can delete it from the phone with one click.
+        if existing["source"] == "phone" and not existing["sync_path"]:
+            db.run("UPDATE videos SET sync_path=?, phone_cleared_at=NULL WHERE id=?", (str(p), existing["id"]))
         return None
     dest = INCOMING / f"{uuid.uuid4().hex[:8]}_{p.name}"
     try:
@@ -172,6 +183,24 @@ def _watch_loop():
         except Exception:
             log.exception("Watch folder scan failed")
         time.sleep(15)
+
+
+# ---------- location for videos added before GPS support ----------
+
+def _backfill_locations() -> None:
+    for v in db.rows("SELECT id, path, sync_path FROM videos WHERE geo_checked=0"):
+        lat = lon = None
+        for p in (v["path"], v["sync_path"], str(PREVIEWS / f"{v['id']}.mp4")):
+            if p and Path(p).exists():
+                try:
+                    meta = media.probe(Path(p))
+                except Exception:
+                    continue
+                if meta["lat"] is not None:
+                    lat, lon = meta["lat"], meta["lon"]
+                    break
+        place = media.place_name(lat, lon) if lat is not None else None
+        db.run("UPDATE videos SET lat=?, lon=?, place=?, geo_checked=1 WHERE id=?", (lat, lon, place, v["id"]))
 
 
 # ---------- previews ----------
@@ -328,6 +357,45 @@ def free_space() -> dict:
     return {"freed": freed, "bytes": size, "kept": kept}
 
 
+def delete_forever(ids: list[int], delete_copies: bool) -> dict:
+    """Deletes videos from YouTube (permanent) and from the vault. With delete_copies,
+    copies still on this PC go to the Recycle Bin and synced phone copies are removed
+    (Syncthing deletes them on the phone)."""
+    deleted, skipped = 0, []
+    for vid in ids:
+        v = db.row("SELECT * FROM videos WHERE id=?", (vid,))
+        if not v:
+            continue
+        if v["status"] == "uploading":
+            skipped.append(f"{v['name']} (uploading right now — try again when it's done)")
+            continue
+        if v["youtube_id"]:
+            try:
+                youtube.delete_video(v["youtube_id"])
+            except youtube.QuotaExceeded:
+                skipped.append(f"{v['name']} (YouTube's daily limit reached — try tomorrow)")
+                break
+            except Exception as e:
+                if not youtube.is_not_found(e):  # already gone on YouTube is fine
+                    skipped.append(f"{v['name']} ({e})")
+                    continue
+        if delete_copies:
+            for p in (v["path"], v["sync_path"]):
+                if p and Path(p).exists():
+                    send2trash(p)
+        elif v["path"] and INCOMING in Path(v["path"]).parents and Path(v["path"]).exists():
+            # The vault's own working copy is never the user's original.
+            send2trash(v["path"])
+        (THUMBS / f"{vid}.jpg").unlink(missing_ok=True)
+        (PREVIEWS / f"{vid}.mp4").unlink(missing_ok=True)
+        db.run("INSERT OR REPLACE INTO tombstones (fingerprint, name, deleted_at) VALUES (?,?,?)",
+               (v["fingerprint"], v["name"], db.now()))
+        db.run("DELETE FROM album_videos WHERE video_id=?", (vid,))  # YouTube drops playlist items itself
+        db.run("DELETE FROM videos WHERE id=?", (vid,))
+        deleted += 1
+    return {"deleted": deleted, "skipped": skipped}
+
+
 def mark_phone_cleared(ids: list[int]) -> None:
     for vid in ids:
         db.run("UPDATE videos SET phone_cleared_at=? WHERE id=? AND source='phone' AND status IN ('on_youtube','done')",
@@ -430,5 +498,6 @@ def start():
     # An upload interrupted by closing the app starts again from the beginning.
     db.run("UPDATE videos SET status='queued', progress=0 WHERE status='uploading'")
     notify.start()
+    threading.Thread(target=_backfill_locations, daemon=True, name="geo_backfill").start()
     for fn in (_media_loop, _youtube_loop, _watch_loop):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()

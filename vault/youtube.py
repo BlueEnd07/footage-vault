@@ -196,6 +196,11 @@ def remove_from_playlist(item_id: str) -> None:
     _call(_service().playlistItems().delete(id=item_id))
 
 
+def delete_video(video_id: str) -> None:
+    """Permanently deletes a video from the channel."""
+    _call(_service().videos().delete(id=video_id))
+
+
 def _iso_duration(value: str) -> float:
     m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value or "")
     if not m:

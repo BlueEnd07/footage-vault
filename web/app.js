@@ -54,15 +54,22 @@ function statusText(v) {
 }
 
 // ---------- views ----------
-function setView(v, aid = null) {
+let events = [];
+let eventId = null;           // auto event being viewed in the photos view
+function setView(v, aid = null, eid = null) {
   view = v;
   albumId = aid;
+  eventId = eid;
   exitSelect();
-  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === (v === "photos" && aid ? "albums" : v)));
+  const tab = v === "photos" && (aid || eid) ? "albums" : v;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === tab));
   $("#photosView").hidden = v !== "photos";
   $("#albumsView").hidden = v !== "albums";
-  $("#albumHeader").hidden = !aid;
-  $("#filters").hidden = !!aid;
+  $("#mapView").hidden = v !== "map";
+  $("#albumHeader").hidden = !(aid || eid);
+  $("#renameAlbum").hidden = $("#deleteAlbum").hidden = !aid;
+  $("#saveEvent").hidden = !eid;
+  $("#filters").hidden = !!(aid || eid);
   window.scrollTo(0, 0);
   lastRendered = "";
   render();
@@ -71,8 +78,10 @@ document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () 
 $("#backToAlbums").onclick = () => setView("albums");
 
 // ---------- gallery ----------
+const currentEvent = () => events.find((e) => e.id === eventId);
 function visible() {
   if (albumId) return videos.filter((v) => albumIds(v).includes(albumId));
+  if (eventId) { const ids = new Set(currentEvent()?.video_ids || []); return videos.filter((v) => ids.has(v.id)); }
   if (filter === "progress") return videos.filter((v) => IN_PROGRESS.has(v.status));
   if (filter === "phone") return videos.filter(onPhoneSafe);
   if (filter === "problems") return videos.filter((v) => PROBLEM.has(v.status));
@@ -94,7 +103,7 @@ function renderGallery() {
     const d = parseDate(v.recorded_at);
     const m = fmtMonth(d), dd = fmtDay(d);
     if (m !== month) { if (open) html += "</div>"; open = false; html += `<div class="month">${m}</div>`; month = m; day = ""; }
-    if (dd !== day) { if (open) html += "</div>"; html += `<div class="day">${dd}</div><div class="grid">`; open = true; day = dd; }
+    if (dd !== day) { if (open) html += "</div>"; html += `<div class="day">${dd}${v.place ? " · " + esc(v.place) : ""}</div><div class="grid">`; open = true; day = dd; }
     html += tile(v);
   }
   if (open) html += "</div>";
@@ -118,29 +127,89 @@ function renderGallery() {
     if (!a) return setView("albums");
     $("#albumTitle").textContent = a.name;
   }
+  if (eventId) {
+    const e = currentEvent();
+    if (!e) return setView("albums");  // event changed shape (new clips arrived)
+    $("#albumTitle").textContent = e.name;
+  }
 }
 
+const card = (attr, cover, name, sub) => `
+  <button class="album-card" ${attr}>
+    <div class="cover">${cover ? `<img loading="lazy" src="/media/thumbs/${cover}.jpg" alt="">` : "Empty"}</div>
+    <div class="name">${esc(name)}</div><div class="count">${sub}</div>
+  </button>`;
+
 function renderAlbums() {
-  $("#albumGrid").innerHTML = albums.length ? albums.map((a) => `
-    <button class="album-card" data-album="${a.id}">
-      <div class="cover">${a.cover ? `<img loading="lazy" src="/media/thumbs/${a.cover}.jpg" alt="">` : "Empty"}</div>
-      <div class="name">${esc(a.name)}</div><div class="count">${a.count} video${a.count === 1 ? "" : "s"}</div>
-    </button>`).join("") : `<p class="muted">No albums yet.</p>`;
+  $("#eventsBlock").hidden = !events.length;
+  $("#eventGrid").innerHTML = events.map((e) => card(`data-event="${e.id}"`, e.cover, e.name, `${e.count} clips`)).join("");
+  $("#albumGrid").innerHTML = albums.length
+    ? albums.map((a) => card(`data-album="${a.id}"`, a.cover, a.name, `${a.count} video${a.count === 1 ? "" : "s"}`)).join("")
+    : `<p class="muted">No albums yet.</p>`;
 }
 
 function render() {
-  const key = [view, albumId, filter, selecting, [...selected].join(), status.connected, status.user_paused,
-    JSON.stringify(videos), JSON.stringify(albums)].join("|");
+  const key = [view, albumId, eventId, filter, selecting, [...selected].join(), status.connected, status.user_paused,
+    JSON.stringify(videos), JSON.stringify(albums), JSON.stringify(events)].join("|");
   if (key === lastRendered) return;
   lastRendered = key;
-  if (view === "photos") renderGallery(); else renderAlbums();
+  if (view === "photos") renderGallery();
+  else if (view === "albums") renderAlbums();
+  else if (view === "map") showMap();
   if (openId) renderDetails();
 }
 
-$("#albumGrid").addEventListener("click", (e) => {
+$("#albumsView").addEventListener("click", (e) => {
   const c = e.target.closest(".album-card");
-  if (c) setView("photos", +c.dataset.album);
+  if (!c) return;
+  if (c.dataset.album) setView("photos", +c.dataset.album);
+  else setView("photos", null, c.dataset.event);
 });
+$("#saveEvent").onclick = async () => {
+  const ev = currentEvent();
+  if (!ev) return;
+  const name = prompt("Save this event as an album (also a private YouTube playlist). Name:", ev.name);
+  if (!name || !name.trim()) return;
+  const { id } = await api("/api/albums", { name });
+  await api(`/api/albums/${id}/add`, { video_ids: ev.video_ids });
+  await refresh();
+  setView("photos", id);
+};
+
+// ---------- map ----------
+let map = null, mapLayer = null, mapKey = "";
+function showMap() {
+  const located = videos.filter((v) => v.lat != null && v.lon != null);
+  $("#mapEmpty").hidden = located.length > 0;
+  if (!map) {
+    map = L.map("map", { zoomControl: true, worldCopyJump: true }).setView([20.6, 78.9], 4);  // India
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+  }
+  setTimeout(() => map.invalidateSize(), 0);  // the map div was hidden until now
+  const key = located.map((v) => v.id).join();
+  if (key === mapKey) return;
+  mapKey = key;
+  if (mapLayer) map.removeLayer(mapLayer);
+  mapLayer = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 50 });
+  for (const v of located) {
+    const icon = L.divIcon({ className: "", iconSize: [54, 54], iconAnchor: [27, 27],
+      html: `<div class="map-thumb" style="background-image:url('/media/thumbs/${v.id}.jpg')"></div>` });
+    const when = parseDate(v.recorded_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    const m = L.marker([v.lat, v.lon], { icon });
+    m.bindPopup(`<div class="map-pop" data-open="${v.id}"><img src="/media/thumbs/${v.id}.jpg" alt="">
+      <div><b>${esc(v.place || "")}</b><br>${when}</div></div>`);
+    mapLayer.addLayer(m);
+  }
+  map.addLayer(mapLayer);
+  if (located.length) map.fitBounds(mapLayer.getBounds(), { padding: [40, 40], maxZoom: 14 });
+}
+$("#map").addEventListener("click", (e) => {
+  const p = e.target.closest("[data-open]");
+  if (p) openViewer(+p.dataset.open);
+});
+
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
   filter = c.dataset.filter;
   history.replaceState(null, "", filter === "all" ? "/" : `/?filter=${filter}`);
@@ -155,11 +224,13 @@ function updateSelBar() {
   $("#selCount").textContent = `${selected.size} selected`;
   $("#selAddAlbum").disabled = $("#selRemoveAlbum").disabled = !selected.size;
   $("#selRemoveAlbum").hidden = !albumId;
+  $("#selDelete").disabled = !selected.size;
   $("#selectBtn").textContent = selecting ? "Done" : "Select";
 }
 $("#selectBtn").onclick = () => { if (view !== "photos") setView("photos"); selecting ? exitSelect() : enterSelect(); render(); };
 $("#selCancel").onclick = () => { exitSelect(); render(); };
 $("#selAddAlbum").onclick = () => openPicker([...selected]);
+$("#selDelete").onclick = () => openDelete([...selected]);
 $("#selRemoveAlbum").onclick = async () => {
   await api(`/api/albums/${albumId}/remove`, { video_ids: [...selected] });
   exitSelect(); refresh();
@@ -275,8 +346,14 @@ async function openFreeSheet() {
       ${freeList(d.synced)}<button class="btn primary" id="freeGo">Delete from phone · free ${fmtSize(d.synced_bytes)}</button></section>`;
   }
   if (d.manual.length) {
-    html += `<section><p><b>${d.manual.length} video${d.manual.length === 1 ? "" : "s"}</b> you added by hand (＋). The app can't delete these, so delete them in your phone's Gallery yourself:</p>
-      ${freeList(d.manual)}<button class="btn" id="freeMark">I've deleted these</button></section>`;
+    const n = `<b>${d.manual.length} video${d.manual.length === 1 ? "" : "s"}</b>`;
+    const how = d.has_phone_sync
+      ? `${n} aren't synced yet. Once Syncthing copies them from your phone (next time it's on Wi-Fi), they appear above and can be deleted with one click.`
+      : `${n} can't be deleted with one click yet. A website isn't allowed to delete files on your phone, so this goes through <b>Syncthing</b>.
+         Set up the phone in Syncthing (SETUP.md, section 5) and these become one-click too.`;
+    html += `<section><p>${how}</p>${freeList(d.manual)}
+      <p class="muted">Or delete them in your phone's Gallery yourself, then tap:</p>
+      <button class="btn" id="freeMark">I've deleted these myself</button></section>`;
   }
   $("#freeBody").innerHTML = html || '<p class="muted">Nothing to free up right now.</p>';
   const go = $("#freeGo");
@@ -297,6 +374,34 @@ async function openFreeSheet() {
   };
 }
 $("#freeBtn").onclick = openFreeSheet;
+
+// ---------- delete forever ----------
+const delTemplate = $("#delBody").innerHTML;
+let delIds = [];
+function openDelete(ids) {
+  delIds = ids;
+  const n = ids.length;
+  $("#delTitle").textContent = n === 1 ? `Delete “${videos.find((v) => v.id === ids[0])?.name}” forever?` : `Delete ${n} videos forever?`;
+  $("#delBody").innerHTML = delTemplate;
+  $("#delBody").querySelectorAll("[data-close]").forEach((b) => b.onclick = () => { $("#delSheet").hidden = true; });
+  $("#delGo").onclick = runDelete;
+  $("#delSheet").hidden = false;
+}
+async function runDelete() {
+  const go = $("#delGo");
+  go.disabled = true; go.textContent = "Deleting…";
+  try {
+    const r = await api("/api/videos/delete", { video_ids: delIds, delete_copies: $("#delCopies").checked });
+    $("#delBody").innerHTML = `<p class="note good">Deleted ${r.deleted} video${r.deleted === 1 ? "" : "s"} forever.</p>` +
+      (r.skipped.length ? `<p class="note bad">Not deleted:<br>${r.skipped.map(esc).join("<br>")}</p>` : "") +
+      `<button class="btn" onclick="document.getElementById('delSheet').hidden=true">OK</button>`;
+    if (openId && delIds.includes(openId)) closeViewer();
+    exitSelect();
+  } catch (e) {
+    $("#delBody").innerHTML = `<p class="note bad">${esc(e.message)}</p><button class="btn" onclick="document.getElementById('delSheet').hidden=true">OK</button>`;
+  }
+  refresh();
+}
 
 // ---------- viewer ----------
 function openViewer(id) {
@@ -348,10 +453,13 @@ function renderDetails() {
       <dt>Length</dt><dd>${fmtDur(v.duration)}</dd>
       <dt>Resolution</dt><dd>${v.width}×${v.height}</dd>
       <dt>Size</dt><dd>${fmtSize(v.size)}</dd>
-      <dt>From</dt><dd>${v.source === "phone" ? "Phone" : "PC"}</dd></dl>
+      <dt>From</dt><dd>${v.source === "phone" ? "Phone" : "PC"}</dd>
+      ${v.place ? `<dt>Place</dt><dd>${esc(v.place)}</dd>` : ""}</dl>
     <div class="album-chips">${chips}<button class="album-chip" id="addToAlbum">＋ Album</button></div>
     ${note}<div class="row">${yt}${retry}</div>
-    <p class="muted" style="margin-top:16px;font-size:13px">The player here uses a 720p copy kept on your PC.</p>`;
+    <p class="muted" style="margin-top:16px;font-size:13px">The player here uses a 720p copy kept on your PC.</p>
+    <div class="del-link"><button class="btn danger" id="delOne" ${v.status === "uploading" ? "disabled title=\"Wait until the upload finishes\"" : ""}>Delete forever…</button></div>`;
+  $("#delOne").onclick = () => openDelete([v.id]);
   $("#addToAlbum").onclick = () => openPicker([v.id]);
   $("#details").querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => { closeViewer(); setView("photos", +b.dataset.goto); });
   const rb = $("#retryBtn");
@@ -607,10 +715,11 @@ function renderBanner() {
 // ---------- polling ----------
 async function refresh() {
   try {
-    const [v, a, s] = await Promise.all([fetch("/api/videos"), fetch("/api/albums"), fetch("/api/status")]);
+    const [v, a, s, ev] = await Promise.all([fetch("/api/videos"), fetch("/api/albums"), fetch("/api/status"), fetch("/api/events")]);
     if (v.status === 401) return location.reload();
     videos = await v.json();
     albums = await a.json();
+    events = await ev.json();
     status = await s.json();
     document.body.classList.toggle("remote", !status.local);
     render();

@@ -134,6 +134,23 @@ In the app, tap **＋** and pick videos. On the same Wi-Fi you can also use the 
 - Every album is also a **private playlist** on your YouTube channel. Renaming or deleting an album
   does the same to the playlist. Deleting an album never deletes videos.
 
+## Events and Map
+
+- **Events** (top of the Albums tab) are made automatically from clips recorded less than **3 hours** apart,
+  even across midnight. Clips more than 50 km apart are split into separate events.
+  Tap an event, then **Save as album** to keep it as an album / YouTube playlist.
+- **Map** shows clips where they were recorded, with the nearest town as the place name. Place names are
+  looked up offline on the PC; only the map's background tiles load from OpenStreetMap.
+  This needs the camera to save location: on the phone, open **Camera → Settings → Location / Geotag** and turn it on.
+  Older videos recorded without it can't be placed.
+
+## Delete forever
+
+Open a video and tap **Delete forever…**, or select several videos and tap **Delete**.
+This deletes the video **from YouTube permanently**, which can't be undone, and removes it from Footage Vault.
+With the box ticked, it also deletes any copy still on the PC (to the Recycle Bin) or on the phone (via Syncthing).
+Deleted videos are remembered, so they're never imported or uploaded again.
+
 ## How deleting works
 
 - The app only deletes an original after **all** of these are true:

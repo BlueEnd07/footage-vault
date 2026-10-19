@@ -8,6 +8,9 @@
   <link rel="icon" href="/static/icon-192.png">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <title>Footage Vault</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.Default.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -16,6 +19,7 @@
     <div class="tabs" role="tablist">
       <button class="tab active" data-view="photos">Videos</button>
       <button class="tab" data-view="albums">Albums</button>
+      <button class="tab" data-view="map">Map</button>
     </div>
     <div class="actions">
       <button class="btn" id="selectBtn">Select</button>
@@ -38,6 +42,7 @@
       <h2 id="albumTitle"></h2>
       <button class="btn" id="renameAlbum">Rename</button>
       <button class="btn danger" id="deleteAlbum">Delete album</button>
+      <button class="btn primary" id="saveEvent" hidden>Save as album</button>
     </div>
     <nav class="filters" id="filters">
       <button class="chip active" data-filter="all">All</button>
@@ -55,9 +60,23 @@
 
   <!-- Albums view -->
   <section id="albumsView" hidden>
+    <div id="eventsBlock">
+      <div class="albums-head"><h2>Events</h2><span class="muted">Clips less than 3 hours apart, grouped automatically</span></div>
+      <div id="eventGrid" class="album-grid"></div>
+    </div>
     <div class="albums-head"><h2>Albums</h2><button class="btn primary" id="newAlbumBtn">＋ New album</button></div>
     <div id="albumGrid" class="album-grid"></div>
     <p class="muted albums-note">Each album is also a private playlist on your YouTube channel.</p>
+  </section>
+
+  <!-- Map view -->
+  <section id="mapView" hidden>
+    <div id="map"></div>
+    <div id="mapEmpty" class="map-empty" hidden>
+      <b>No videos with a location yet.</b>
+      <p class="muted">Your camera isn't saving location. On your phone open the <b>Camera app → Settings</b> and turn on
+        <b>Location / Geotag</b>. New videos will then show up here with place names.</p>
+    </div>
   </section>
 
   <!-- Selection bar -->
@@ -65,6 +84,7 @@
     <span id="selCount">0 selected</span>
     <button class="btn primary" id="selAddAlbum">Add to album</button>
     <button class="btn" id="selRemoveAlbum" hidden>Remove from album</button>
+    <button class="btn danger" id="selDelete">Delete</button>
     <button class="btn" id="selCancel">Cancel</button>
   </div>
 
@@ -95,6 +115,24 @@
       <button class="close" data-close="freeSheet" aria-label="Close">✕</button>
       <h2>Free up space on your phone</h2>
       <div id="freeBody"><p class="muted">Checking…</p></div>
+    </div>
+  </div>
+
+  <!-- Delete forever -->
+  <div id="delSheet" class="sheet" hidden>
+    <div class="sheet-body">
+      <button class="close" data-close="delSheet" aria-label="Close">✕</button>
+      <h2 id="delTitle">Delete forever?</h2>
+      <div id="delBody">
+        <p class="note bad">This deletes it from <b>YouTube permanently</b>. It can't be undone, and YouTube can't restore it.</p>
+        <p class="muted">It's also removed from Footage Vault (preview, thumbnail, albums) and won't be imported again.</p>
+        <label class="check-row"><input type="checkbox" id="delCopies" checked>
+          <span>Also delete any copy still on this PC (to the Recycle Bin) or on your phone (removed at the next Syncthing sync)</span></label>
+        <div class="row" style="margin-top:16px">
+          <button class="btn danger-fill" id="delGo">Delete forever</button>
+          <button class="btn" data-close="delSheet">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -159,6 +197,8 @@
     </div>
   </div>
 
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/vendor/leaflet/leaflet.markercluster.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

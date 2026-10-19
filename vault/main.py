@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, media, notify, worker, youtube
+from . import db, events, media, notify, worker, youtube
 from .config import INCOMING, PREVIEWS, STATIC, THUMBS, load_settings, save_settings
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -125,7 +125,7 @@ async def submit_pin(request: Request):
 def list_videos():
     return db.rows("""SELECT v.id, v.name, v.source, v.size, v.duration, v.width, v.height, v.recorded_at,
                              v.status, v.progress, v.error, v.youtube_id, v.delete_after, v.deleted_at,
-                             v.phone_cleared_at, v.sync_path IS NOT NULL AS synced,
+                             v.phone_cleared_at, v.sync_path IS NOT NULL AS synced, v.lat, v.lon, v.place,
                              (SELECT group_concat(av.album_id) FROM album_videos av
                                WHERE av.video_id = v.id AND av.removed = 0) AS albums
                       FROM videos v ORDER BY v.recorded_at DESC""")
@@ -168,9 +168,13 @@ async def upload_from_device(request: Request, name: str, modified: int = 0):
     if Path(safe).suffix.lower() not in media.VIDEO_EXTS:
         raise HTTPException(400, f"{safe} is not a supported video type")
     dest = INCOMING / f"{uuid.uuid4().hex[:8]}_{safe}"
-    with open(dest, "wb") as f:
-        async for chunk in request.stream():
-            f.write(chunk)
+    try:
+        with open(dest, "wb") as f:
+            async for chunk in request.stream():
+                f.write(chunk)
+    except BaseException:
+        dest.unlink(missing_ok=True)  # phone lost Wi-Fi / page closed mid-send
+        raise
     fallback = datetime.fromtimestamp(modified / 1000) if modified else None
     try:
         vid = await run_in_threadpool(worker.register, dest, "phone", fallback, safe)
@@ -253,7 +257,8 @@ def free_space_preview():
     c = worker.free_space_candidates()
     pick = lambda rows: [{"id": r["id"], "name": r["name"], "size": r["size"], "recorded_at": r["recorded_at"]} for r in rows]
     return {"synced": pick(c["synced"]), "manual": pick(c["manual"]),
-            "synced_bytes": sum(r["size"] for r in c["synced"])}
+            "synced_bytes": sum(r["size"] for r in c["synced"]),
+            "has_phone_sync": any(f.get("source") == "phone" for f in load_settings().get("watch_folders") or [])}
 
 
 @app.post("/api/free-space")
@@ -268,6 +273,23 @@ def free_space_run():
         raise HTTPException(500, f"Couldn't free up space: {e}")
 
 
+class DeleteReq(BaseModel):
+    video_ids: list[int]
+    delete_copies: bool = True
+
+
+@app.post("/api/videos/delete")
+def delete_forever(req: DeleteReq):
+    """Permanent: deletes from YouTube and the vault (see worker.delete_forever)."""
+    if not req.video_ids:
+        return {"deleted": 0, "skipped": []}
+    if youtube.credentials() is None and db.row(
+            f"SELECT 1 FROM videos WHERE youtube_id IS NOT NULL AND id IN ({','.join('?' * len(req.video_ids))})",
+            req.video_ids):
+        raise HTTPException(503, "YouTube isn't connected, so the YouTube copy can't be deleted. Reconnect first.")
+    return worker.delete_forever(req.video_ids, req.delete_copies)
+
+
 @app.post("/api/free-space/mark")
 def free_space_mark(req: VideoIdsReq):
     """For videos added by hand: the user deleted them on the phone themselves."""
@@ -279,6 +301,12 @@ def free_space_mark(req: VideoIdsReq):
 
 class AlbumReq(BaseModel):
     name: str
+
+
+@app.get("/api/events")
+def list_events():
+    vids = db.rows("SELECT id, recorded_at, lat, lon, place FROM videos")
+    return events.build(vids, float(load_settings().get("event_gap_hours", 3)))
 
 
 @app.get("/api/albums")

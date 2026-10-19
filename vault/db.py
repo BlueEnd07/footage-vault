@@ -57,6 +57,14 @@ CREATE TABLE IF NOT EXISTS album_videos (
     PRIMARY KEY (album_id, video_id)
 );
 
+-- Videos deleted forever: their fingerprint stays here so a copy still on the
+-- phone/PC isn't imported and uploaded again.
+CREATE TABLE IF NOT EXISTS tombstones (
+    fingerprint TEXT PRIMARY KEY,
+    name        TEXT,
+    deleted_at  TEXT NOT NULL
+);
+
 -- Web Push subscriptions (one per phone/browser that turned notifications on)
 CREATE TABLE IF NOT EXISTS push_subs (
     endpoint   TEXT PRIMARY KEY,
@@ -88,6 +96,12 @@ def init() -> None:
     if "phone_cleared_at" not in cols:
         # Set once the phone's copy is gone (Free up space, deleted on the phone, or marked by hand).
         c.execute("ALTER TABLE videos ADD COLUMN phone_cleared_at TEXT")
+    if "lat" not in cols:
+        # GPS from the file (if the camera saved it) and the nearest town, looked up offline.
+        c.execute("ALTER TABLE videos ADD COLUMN lat REAL")
+        c.execute("ALTER TABLE videos ADD COLUMN lon REAL")
+        c.execute("ALTER TABLE videos ADD COLUMN place TEXT")
+        c.execute("ALTER TABLE videos ADD COLUMN geo_checked INTEGER NOT NULL DEFAULT 0")
     c.commit()
 
 

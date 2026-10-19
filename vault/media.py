@@ -1,7 +1,9 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -75,7 +77,35 @@ def probe(path: Path) -> dict:
             break
 
     duration = float(fmt.get("duration") or video.get("duration") or 0)
-    return {"duration": duration, "width": w, "height": h, "recorded": recorded}
+    lat, lon = _location(fmt.get("tags") or {}, video.get("tags") or {})
+    return {"duration": duration, "width": w, "height": h, "recorded": recorded, "lat": lat, "lon": lon}
+
+
+def _location(*tag_sets) -> tuple[float | None, float | None]:
+    """GPS from ISO 6709 tags like '+17.4401+078.3489/' (Android 'location', Apple ...ISO6709)."""
+    for tags in tag_sets:
+        for k, v in tags.items():
+            if "location" in k.lower() or "6709" in k:
+                m = re.match(r"\s*([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)", str(v))
+                if m:
+                    lat, lon = float(m.group(1)), float(m.group(2))
+                    if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0):
+                        return lat, lon
+    return None, None
+
+
+_geo_lock = threading.Lock()
+
+
+def place_name(lat: float, lon: float) -> str | None:
+    """Nearest town, offline (GeoNames data in the reverse_geocoder package)."""
+    try:
+        import reverse_geocoder as rg
+        with _geo_lock:  # first call loads the dataset
+            r = rg.search([(lat, lon)], mode=1, verbose=False)[0]
+        return r["name"] or r["admin1"] or None
+    except Exception:
+        return None
 
 
 def make_thumb(src: Path, dst: Path, duration: float) -> None:
@@ -93,7 +123,9 @@ def make_preview(src: Path, dst: Path) -> None:
               "-map", "0:v:0", "-map", "0:a:0?",
               "-vf", _SHORT_SIDE.format(n=720) + ",format=yuv420p",
               "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-              "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(tmp)])
+              "-c:a", "aac", "-b:a", "128k", "-map_metadata", "0",
+              # keep tags such as GPS location in the preview, which outlives the original
+              "-movflags", "+faststart+use_metadata_tags", str(tmp)])
     if r.returncode or not tmp.exists():
         tmp.unlink(missing_ok=True)
         raise RuntimeError("Preview failed: " + r.stderr.strip()[-300:])

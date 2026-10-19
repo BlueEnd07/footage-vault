@@ -7,3 +7,4 @@ tzdata
 pywebpush>=2.0
 pystray>=0.19
 pillow>=10.0
+reverse_geocoder>=1.5  # offline place names from GPS (GeoNames data bundled)

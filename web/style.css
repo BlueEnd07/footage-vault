@@ -175,3 +175,25 @@ body.selecting .tile .check { display: block; }
 .free-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .free-list li span:last-child { color: var(--muted); white-space: nowrap; }
 #freeBody section { margin-bottom: 18px; }
+
+.btn.danger-fill { background: var(--bad); color: #fff; border-color: transparent; }
+.check-row { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; cursor: pointer; }
+.check-row input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.details .del-link { margin-top: 18px; }
+@media (max-width: 600px) { .sel-bar { padding-left: 14px; gap: 6px; } .sel-bar .btn { padding: 8px 11px; } }
+
+/* ---------- events + map ---------- */
+.albums-head .muted { font-size: 13px; }
+#eventsBlock .albums-head { flex-wrap: wrap; gap: 4px 12px; justify-content: flex-start; }
+.album-card .when { color: var(--muted); font-size: 13px; }
+#mapView { position: relative; }
+#map { height: calc(100vh - 66px); height: calc(100dvh - 66px); background: var(--tile); }
+@media (max-width: 600px) { #map { height: calc(100dvh - 112px); } }
+.map-empty { position: absolute; z-index: 500; left: 50%; top: 40%; transform: translate(-50%, -50%); width: min(420px, calc(100% - 32px));
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+.map-thumb { width: 54px; height: 54px; border-radius: 12px; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,.45);
+  background: #333 center/cover no-repeat; }
+.map-pop { width: 200px; cursor: pointer; }
+.map-pop img { width: 100%; border-radius: 8px; display: block; }
+.map-pop div { margin-top: 6px; font-size: 13px; }
+.leaflet-container { font: inherit; }
