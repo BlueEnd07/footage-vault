@@ -84,7 +84,7 @@ It copies new camera videos to the PC **only on Wi-Fi**, and the vault picks the
 **PC:**
 1. Install **Syncthing** for Windows from https://syncthing.net/downloads/ (use "Syncthing Windows Setup"),
    then open its web page at http://127.0.0.1:8384.
-2. Make an empty folder for phone videos, e.g. `C:\Users\Keus Automation\Videos\Phone`.
+2. Make an empty folder for phone videos, e.g. `%USERPROFILE%\Videos\Phone`.
 
 **Phone (Android):**
 1. Install **Syncthing-Fork** from the Play Store or F-Droid. It's the maintained Android version of Syncthing.
@@ -109,7 +109,7 @@ It copies new camera videos to the PC **only on Wi-Fi**, and the vault picks the
 
 **Back on the PC:**
 1. In Syncthing, accept the shared folder.
-   - Set its path to the folder you made, e.g. `C:\Users\Keus Automation\Videos\Phone`.
+   - Set its path to the folder you made, e.g. `%USERPROFILE%\Videos\Phone`.
    - **Folder type: Send & Receive**. Footage Vault only deletes files here when you tap **Free up space**.
 2. In Footage Vault: **⚙ → Watched folders → ＋ Phone sync folder**, and paste that same path.
 
@@ -125,7 +125,7 @@ It copies new camera videos to the PC **only on Wi-Fi**, and the vault picks the
 ### Manual upload (any time, no Syncthing needed)
 
 In the app, tap **＋** and pick videos. On the same Wi-Fi you can also use the local address shown in
-⚙ Settings (e.g. `http://192.168.1.81:8765`). Keep the page open until sending finishes.
+⚙ Settings (e.g. `http://192.168.x.x:8765`). Keep the page open until sending finishes.
 
 ## Albums
 
