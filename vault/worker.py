@@ -3,6 +3,7 @@ watched folders and album/playlist sync."""
 import ctypes
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -25,6 +26,7 @@ state = {
     "user_paused": False,   # "Pause uploads" in the tray menu
     "import": None,         # {"folder", "found", "added", "skipped", "running"}
     "albums_paused_until": 0.0,
+    "takeout": None,         # progress of "Import YouTube Takeout"
     "yt_import": None,       # result of the last pull from YouTube
     "yt_import_now": False,  # "Sync from YouTube" button
 }
@@ -118,6 +120,76 @@ def import_folder(folder: str) -> None:
                 except Exception as e:  # unreadable / not really a video
                     log.warning("Import skipped %s: %s", p, e)
                     info["errors"] += 1
+        finally:
+            info["running"] = False
+
+
+# ---------- Google Takeout: local copies of videos that were uploaded to YouTube directly ----------
+
+def _norm_title(s: str) -> str:
+    return "".join(ch for ch in s.casefold() if ch.isalnum())
+
+
+def _takeout_titles(root: Path) -> dict[str, set[str]]:
+    """Takeout's 'video metadata' CSV, when included: normalised title -> video ids."""
+    import csv
+    out: dict[str, set[str]] = {}
+    for f in root.rglob("*.csv"):
+        try:
+            with open(f, encoding="utf-8-sig", newline="") as fh:
+                for row in csv.DictReader(fh):
+                    vid = row.get("Video ID") or row.get("Video Id")
+                    title = row.get("Video Title (Original)") or row.get("Video Title") or row.get("Title")
+                    if vid and title:
+                        out.setdefault(_norm_title(title), set()).add(vid)
+        except Exception:
+            continue
+    return out
+
+
+def import_takeout(folder: str) -> None:
+    """Matches each video file in an unzipped Google Takeout (YouTube > videos) to a video the
+    vault only knows from YouTube, by title and length. Matched videos get a local preview,
+    thumbnail, faces and location, and play like any other clip. Nothing is uploaded again."""
+    root = Path(folder)
+    with _import_lock:
+        info = state["takeout"] = {"folder": str(root), "found": 0, "matched": 0, "already": 0,
+                                   "unmatched": [], "running": True}
+        try:
+            by_csv = _takeout_titles(root)
+            waiting = db.rows("SELECT id, name, duration, youtube_id FROM videos WHERE status='youtube'")
+            for p in _video_files(root):
+                info["found"] += 1
+                try:
+                    meta = media.probe(p)
+                    fp = media.fingerprint(p)
+                except Exception:
+                    info["unmatched"].append(p.name)
+                    continue
+                if db.row("SELECT 1 FROM videos WHERE fingerprint=?", (fp,)):
+                    info["already"] += 1  # e.g. a vault upload, already has its own copy
+                    continue
+                # Takeout names files after the title; "(1)", "(2)"… when titles repeat.
+                stem = _norm_title(re.sub(r"\(\d+\)$", "", p.stem.strip()))
+                ids = by_csv.get(stem, set())
+                cands = [w for w in waiting if w["youtube_id"] in ids or _norm_title(w["name"]) == stem]
+                # Same title can mean several videos: the length decides (closest wins).
+                close = sorted((w for w in cands if abs((w["duration"] or 0) - meta["duration"]) <= max(2.0, meta["duration"] * 0.01)),
+                               key=lambda w: abs((w["duration"] or 0) - meta["duration"]))
+                pick = close[0] if close else None
+                if not pick:
+                    info["unmatched"].append(p.name)
+                    continue
+                waiting.remove(pick)
+                recorded = meta["recorded"].strftime("%Y-%m-%d %H:%M:%S") if meta["recorded"] else None
+                place = media.place_name(meta["lat"], meta["lon"]) if meta["lat"] is not None else None
+                db.run("""UPDATE videos SET fingerprint=?, path=?, size=?, width=?, height=?, duration=?,
+                                 recorded_at=COALESCE(?, recorded_at), lat=?, lon=?, place=?, geo_checked=1,
+                                 faces_checked=0, status='new', error=NULL
+                          WHERE id=? AND status='youtube'""",
+                       (fp, str(p), p.stat().st_size, meta["width"], meta["height"], meta["duration"],
+                        recorded, meta["lat"], meta["lon"], place, pick["id"]))
+                info["matched"] += 1
         finally:
             info["running"] = False
 
@@ -218,7 +290,15 @@ def _media_loop():
             src = Path(v["path"])
             media.make_thumb(src, THUMBS / f"{v['id']}.jpg", v["duration"] or 0)
             media.make_preview(src, PREVIEWS / f"{v['id']}.mp4")
-            db.run("UPDATE videos SET status='queued', error=NULL WHERE id=?", (v["id"],))
+            if v["youtube_id"]:
+                # Already on YouTube (a Takeout copy of a video uploaded elsewhere): don't upload
+                # again; the file is treated like an original that's safely backed up.
+                days = load_settings()["delete_after_days"]
+                delete_after = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                db.run("""UPDATE videos SET status='on_youtube', error=NULL, processed_at=?, delete_after=?
+                          WHERE id=?""", (db.now(), delete_after, v["id"]))
+            else:
+                db.run("UPDATE videos SET status='queued', error=NULL WHERE id=?", (v["id"],))
         except Exception as e:
             db.run("UPDATE videos SET status='failed', error=? WHERE id=?", (str(e)[:500], v["id"]))
             notify.event("failed")
@@ -505,8 +585,9 @@ def import_from_youtube() -> dict:
             continue
         _download_thumb(d["thumb"], vid)
         info["added"] += 1
-    # Deleted on YouTube directly: drop the vault entry (it has no local file).
-    for r in db.rows("SELECT id, youtube_id FROM videos WHERE source='youtube'"):
+    # Deleted on YouTube directly: drop the vault entry if it has no local copy (one that came
+    # in through Takeout keeps its preview, like any other clip).
+    for r in db.rows("SELECT id, youtube_id FROM videos WHERE source='youtube' AND status='youtube'"):
         if r["youtube_id"] not in on_channel:
             faces.forget_video(r["id"])
             db.run("DELETE FROM album_videos WHERE video_id=?", (r["id"],))

@@ -212,6 +212,22 @@
           <button class="btn" id="pushOff" hidden>Turn off</button>
         </div>
       </section>
+      <section class="pc-only" id="takeoutSection">
+        <h3>Play YouTube-only videos like your others</h3>
+        <p class="muted" id="takeoutIntro"></p>
+        <ol class="steps">
+          <li>Open <a href="https://takeout.google.com/" target="_blank" rel="noopener">takeout.google.com</a> with your
+            channel's Google account and click <b>Deselect all</b>.</li>
+          <li>Tick only <b>YouTube and YouTube Music</b>. Under <b>All YouTube data included</b>, keep just
+            <b>videos</b> and <b>video metadata</b>.</li>
+          <li><b>Next step → Create export</b>. Google emails you when it's ready (minutes to hours). Download and unzip it.</li>
+          <li>Click below and paste the unzipped folder's path (the one containing <code>Takeout</code>).</li>
+        </ol>
+        <div class="row"><button class="btn primary" id="takeoutBtn">Import YouTube Takeout</button></div>
+        <p class="muted" style="font-size:13px">Nothing is uploaded again. After the usual grace period, the Takeout
+          files go to the Recycle Bin like other originals, so keep the zip if you want the originals.</p>
+        <div id="takeoutState"></div>
+      </section>
       <section class="pc-only">
         <h3>Open on your phone</h3>
         <div id="tsBlock"></div>

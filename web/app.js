@@ -44,6 +44,7 @@ function statusText(v) {
     case "uploaded": return "Uploaded · YouTube is processing";
     case "on_youtube": {
       const when = v.delete_after ? parseDate(v.delete_after).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+      if (v.source === "youtube") return `On YouTube · Takeout file goes to Recycle Bin ${when}`;
       return v.source === "pc" ? `On YouTube · original goes to Recycle Bin ${when}` : `On YouTube · PC copy cleared ${when}`;
     }
     case "done": return "On YouTube · original deleted";
@@ -439,7 +440,7 @@ function showInViewer(id) {
   if (!v) return closeViewer();
   const player = $("#player"), frame = $("#ytFrame");
   player.pause();
-  const ytOnly = v.source === "youtube";
+  const ytOnly = v.status === "youtube";
   const ready = !ytOnly && v.status !== "new";
   player.hidden = !ready;
   frame.hidden = !ytOnly;
@@ -552,8 +553,8 @@ function renderDetails() {
     note = `<div class="note good">✓ On YouTube and removed from your phone.</div>`;
   else if (v.source === "phone" && !PROBLEM.has(v.status))
     note = `<div class="note">Keep this video on your phone until it says it's safe to delete.</div>`;
-  else if (v.source === "youtube")
-    note = `<div class="note">Uploaded to YouTube directly, so it plays from YouTube. ${v.privacy === "private" ? "YouTube may only play private videos in the YouTube app/site — use ▶ at the top." : ""}</div>`;
+  else if (v.status === "youtube")
+    note = `<div class="note">Uploaded to YouTube directly, so it plays from YouTube. <b>Import YouTube Takeout</b> in ⚙ Settings gives it a copy here. ${v.privacy === "private" ? "YouTube may only play private videos in the YouTube app/site — use ▶ at the top." : ""}</div>`;
   if (v.error) note += `<div class="note bad">${esc(v.error)}</div>`;
 
   const chips = albumIds(v).map((id) => albums.find((a) => a.id === id)).filter(Boolean)
@@ -579,7 +580,7 @@ function renderDetails() {
       <dt>From</dt><dd>${v.source === "phone" ? "Phone" : v.source === "youtube" ? "YouTube" : "PC"}</dd>
       ${v.privacy ? `<dt>On YouTube</dt><dd>${esc(v.privacy)}</dd>` : ""}</dl>
     <div class="row">${yt}${retry}</div>
-    ${v.source !== "youtube" ? '<p class="muted" style="margin-top:12px;font-size:13px">Plays a 720p copy kept on your PC. ▶ at the top opens full quality on YouTube.</p>' : ""}`;
+    ${v.status !== "youtube" ? '<p class="muted" style="margin-top:12px;font-size:13px">Plays a 720p copy kept on your PC. ▶ at the top opens full quality on YouTube.</p>' : ""}`;
   $("#addToAlbum").onclick = () => openPicker([v.id]);
   $("#details").querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => { closeViewer(); setView("photos", +b.dataset.goto); });
   $("#details").querySelectorAll("[data-person]").forEach((b) => b.onclick = () => { closeViewer(); setView("photos", null, null, +b.dataset.person); });
@@ -741,6 +742,13 @@ $("#watchList").addEventListener("click", async (e) => {
   await refresh(); renderSettings();
 });
 
+$("#takeoutBtn").onclick = async () => {
+  const folder = prompt("Path of the unzipped Google Takeout folder (the one that contains 'Takeout'):");
+  if (!folder) return;
+  try { await api("/api/takeout", { folder }); } catch (e) { return alert(e.message); }
+  refresh();
+};
+
 $("#ytSyncBtn").onclick = async () => {
   await api("/api/youtube/import", {});
   $("#ytSyncState").textContent = "Syncing…";
@@ -794,6 +802,17 @@ async function renderSettings() {
   const yi = status.yt_import;
   if ($("#ytSyncState").textContent !== "Syncing…" || yi)
     $("#ytSyncState").textContent = yi ? `Last sync ${yi.at.slice(11, 16)}: ${yi.added} new video${yi.added === 1 ? "" : "s"}, ${yi.albums} new album${yi.albums === 1 ? "" : "s"}` : "";
+  const n = status.youtube_only || 0;
+  $("#takeoutIntro").textContent = n
+    ? `${n} video${n === 1 ? "" : "s"} uploaded to YouTube directly only play from YouTube (private ones often won't play here at all). Give them a copy here in 4 steps:`
+    : "All your videos have a copy here. If you upload to YouTube directly again, you can repeat this.";
+  const to = status.takeout;
+  $("#takeoutState").innerHTML = !to ? "" : to.running
+    ? `<p class="note">Matching files… ${to.found} checked, ${to.matched} matched</p>`
+    : `<p class="note ${to.matched ? "good" : ""}">Takeout: ${to.matched} video${to.matched === 1 ? "" : "s"} matched` +
+      (to.already ? `, ${to.already} already had a copy` : "") +
+      (to.unmatched.length ? `, ${to.unmatched.length} not matched (${to.unmatched.slice(0, 5).map(esc).join(", ")}${to.unmatched.length > 5 ? "…" : ""})` : "") +
+      `${to.matched ? ". Previews are being made now." : "."}</p>`;
   const ts = status.tailscale;
   $("#tsBlock").innerHTML = !ts ? `<p class="muted">Tailscale isn't running on this PC.</p>`
     : ts.https ? `<p class="muted">From anywhere (Tailscale). On your phone open this in Chrome, then <b>⋮ → Install app</b>:</p><div class="code">${esc(ts.url)}</div>`

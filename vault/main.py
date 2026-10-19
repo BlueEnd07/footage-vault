@@ -153,6 +153,8 @@ def status(request: Request):
         "delete_after_days": s["delete_after_days"],
         "push_devices": db.row("SELECT COUNT(*) n FROM push_subs")["n"],
         "yt_import": worker.state["yt_import"],
+        "takeout": worker.state["takeout"],
+        "youtube_only": db.row("SELECT COUNT(*) n FROM videos WHERE status='youtube'")["n"],
         "faces": faces.progress(),  # {checked, total, models_ok, ...}
     }
     if is_local(request):
@@ -214,6 +216,17 @@ def import_folder(req: FolderReq, request: Request):
     if worker.state["import"] and worker.state["import"]["running"]:
         raise HTTPException(409, "An import is already running")
     threading.Thread(target=worker.import_folder, args=(str(folder),), daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/takeout")
+def import_takeout(req: FolderReq, request: Request):
+    """Unzipped Google Takeout (YouTube > videos): gives YouTube-only videos a local preview."""
+    require_local(request)
+    folder = _folder(req.folder)
+    if (worker.state["import"] or {}).get("running") or (worker.state["takeout"] or {}).get("running"):
+        raise HTTPException(409, "An import is already running")
+    threading.Thread(target=worker.import_takeout, args=(str(folder),), daemon=True).start()
     return {"ok": True}
 
 

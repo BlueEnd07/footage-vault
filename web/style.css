@@ -260,3 +260,7 @@ body.selecting .tile .check { display: block; }
   background: var(--bad); color: #fff; cursor: pointer; line-height: 20px; padding: 0; }
 .tile .fav { position: absolute; left: 6px; bottom: 4px; color: #fff; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 .dot.s-youtube { background: #ff4e45; }
+
+.steps { margin: 6px 0 10px; padding-left: 20px; }
+.steps li { margin: 4px 0; }
+.sheet code { font-family: ui-monospace, Consolas, monospace; font-size: 13px; background: var(--panel); padding: 1px 5px; border-radius: 5px; }
