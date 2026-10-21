@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -119,7 +120,7 @@ fun youTubePlayerIntent(ctx: Context, list: List<Item>, index: Int): Intent {
         val t = Instant.ofEpochMilli(x.recorded).atZone(ZoneId.systemDefault())
         listOfNotNull(dayLabel(t.toLocalDate()), DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()).format(t), x.place).joinToString(" · ")
     }
-    return YouTubePlayerActivity.intent(ctx, ids.toTypedArray(), labels.toTypedArray(), index)
+    return YouTubePlayerActivity.intent(ctx, ids.toTypedArray(), labels.toTypedArray(), index, list.map { it.id }.toLongArray())
 }
 
 fun openOnYouTube(ctx: Context, ytId: String) {
@@ -155,7 +156,7 @@ fun shareItems(ctx: Context, items: List<Item>): String? {
 @Composable
 fun ViewerScreen(
     list: List<Item>, start: Int, vm: AppViewModel,
-    onClose: () -> Unit, onAddToAlbum: (Item) -> Unit,
+    onClose: () -> Unit, onAddToAlbum: (Item) -> Unit, onDelete: (Item) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -279,8 +280,7 @@ fun ViewerScreen(
                     if (live.favorite) Color(0xFFF28B82) else Color.White) { vm.setFavorite(listOf(live.id), !live.favorite) }
                 BarButton(Icons.Outlined.Info, "Info") { showInfo = true }
                 BarButton(Icons.Outlined.LibraryAdd, "Add to") { onAddToAlbum(live) }
-                if (live.onPhone && live.status == "backed_up")
-                    BarButton(Icons.Outlined.DeleteSweep, "Free up") { vm.freeUpSpace(listOf(live)) }
+                BarButton(Icons.Outlined.Delete, "Delete") { onDelete(live) }
             }
         }
 

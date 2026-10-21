@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -83,6 +84,7 @@ import com.footagevault.app.net.Auth
 import com.footagevault.app.ui.AlbumPicker
 import com.footagevault.app.ui.AppViewModel
 import com.footagevault.app.ui.ConfirmDialog
+import com.footagevault.app.ui.DeleteDialog
 import com.footagevault.app.ui.DuplicatesScreen
 import com.footagevault.app.ui.isDark
 import com.footagevault.app.ui.shareItems
@@ -154,6 +156,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     var viewer by remember { mutableStateOf<Pair<List<Item>, Int>?>(null) }
     val selected = remember { mutableStateListOf<Long>() }
     var picker by remember { mutableStateOf<List<Item>?>(null) }
+    var deleting by remember { mutableStateOf<List<Item>?>(null) }  // delete dialog
     var dialog by remember { mutableStateOf<String?>(null) }  // "newAlbum" | "rename" | "deleteAlbum" | "saveEvent"
     val snack = remember { SnackbarHostState() }
 
@@ -218,10 +221,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                     IconButton(onClick = { vm.setFavorite(selected.toList(), !allFav); selected.clear() }) { Icon(Icons.Outlined.FavoriteBorder, "Favourite") }
                     IconButton(onClick = { shareItems(ctx, selItems)?.let(vm::say); selected.clear() }) { Icon(Icons.Outlined.Share, "Share") }
                     IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
-                    if (selItems.any { it.onPhone && it.status == "backed_up" })
-                        IconButton(onClick = { vm.freeUpSpace(selItems.filter { it.onPhone && it.status == "backed_up" }); selected.clear() }) {
-                            Icon(Icons.Outlined.DeleteSweep, "Remove from phone")
-                        }
+                    IconButton(onClick = { deleting = selItems }) { Icon(Icons.Outlined.Delete, "Delete") }
                 },
             )
             else TopAppBar(
@@ -316,8 +316,9 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
 
     viewer?.let { (list, start) ->
         if (list.isEmpty()) { viewer = null; return@let }
-        ViewerScreen(list, start, vm, onClose = { viewer = null }, onAddToAlbum = { picker = listOf(it) })
+        ViewerScreen(list, start, vm, onClose = { viewer = null }, onAddToAlbum = { picker = listOf(it) }, onDelete = { deleting = listOf(it) })
     }
+    deleting?.let { list -> DeleteDialog(list, vm) { deleting = null; selected.clear() } }
     picker?.let { list ->
         AlbumPicker(albums, list,
             onPick = { pid -> vm.addToAlbum(pid, list); picker = null; selected.clear() },

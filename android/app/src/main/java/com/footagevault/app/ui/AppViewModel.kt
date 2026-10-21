@@ -201,19 +201,50 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Removes these from the phone without the YouTube check (used for duplicate copies). */
     fun removeFromPhone(list: List<Item>) = io {
-        val onPhone = list.filter { it.onPhone && it.uri != null }
+        // Uploading / still processing on YouTube: the phone copy may be the only good one yet.
+        val busy = list.filter { it.onPhone && it.ytId != null && it.status != "backed_up" }
+        if (busy.isNotEmpty()) say("${busy.size} still processing on YouTube; kept on the phone for now")
+        val onPhone = list.filter { it.onPhone && it.uri != null && it !in busy }
         if (onPhone.isEmpty()) return@io
         pendingDelete = onPhone
         _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, onPhone.map { Uri.parse(it.uri) })))
     }
 
-    /** Permanently deletes the YouTube copy (duplicates). A phone copy, if any, stays and backs up again. */
+    /** Permanently deletes the YouTube copy (duplicates). A phone copy stays, marked "don't back up". */
     fun deleteFromYouTube(item: Item) = io {
         val id = item.ytId ?: return@io
         yt.deleteVideo(id)
-        if (item.onPhone) db.update(item.id, "yt_id" to null, "status" to "local", "privacy" to null)
-        else db.delete(item.id)
+        forgetYouTubeCopy(item)
         say("Deleted from YouTube")
+    }
+
+    /**
+     * After the YouTube copy is gone: a phone copy becomes "excluded" (never re-uploaded by itself);
+     * a YouTube-only entry disappears.
+     */
+    private fun forgetYouTubeCopy(item: Item) {
+        if (item.onPhone) db.update(item.id, "yt_id" to null, "status" to "excluded", "privacy" to null, "upload_url" to null)
+        else db.delete(item.id)
+    }
+
+    /** "Delete everywhere": from YouTube (permanent), then Android's own prompt for any phone copies. */
+    fun deleteEverywhere(list: List<Item>) = io {
+        var gone = 0
+        for (it in list) {
+            val id = it.ytId
+            if (id != null) {
+                try { yt.deleteVideo(id) } catch (e: ApiException) { if (!e.isNotFound) throw e }  // already gone is fine
+                gone++
+            }
+            forgetYouTubeCopy(it)
+        }
+        val onPhone = list.filter { it.onPhone && it.uri != null }
+        if (onPhone.isNotEmpty()) {
+            // Fresh rows: they no longer have a YouTube id, so the phone delete removes them completely.
+            pendingDelete = onPhone.mapNotNull { db.item(it.id) }
+            _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, onPhone.map { Uri.parse(it.uri) })))
+        }
+        if (gone > 0) say("Deleted $gone from YouTube" + if (onPhone.isNotEmpty()) "; confirm to delete from the phone too" else "")
     }
 
     // ---------- duplicates ----------

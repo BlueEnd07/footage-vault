@@ -63,7 +63,7 @@ apps; switch it on, go back and tap Update again. You can also check by hand in 
   - **ring**: uploading
   - **♥**: favourite
 - **Select:** long-press a video, or tap a day's circle to select the whole day. The top bar then offers
-  **Favourite**, **Share**, **Add to album** and **Remove from phone** (for backed-up videos).
+  **Favourite**, **Share**, **Add to album** and **Delete**.
 - **Pull down** to refresh from YouTube.
 
 ## Watching
@@ -77,7 +77,18 @@ apps; switch it on, go back and tap Update again. You can also check by hand in 
 - **Double-tap** the left or right side to skip 10 seconds.
 - Long videos **resume** where you stopped.
 - The bottom bar has **Share**, **Favourite**, **Info** (date, place, size, backup status), **Add to** (album)
-  and **Free up** (when it's safely backed up).
+  and **Delete**.
+- In the **YouTube player**, touch the screen to show ← back, **♡ Favourite** and **🗑 Delete** at the top.
+
+## Deleting
+
+**Delete** (selection bar, viewer, or the YouTube player) asks what you want:
+- **Delete from phone:** frees space and keeps the YouTube copy. Videos still processing on YouTube are kept
+  until they're done.
+- **Delete everywhere** (or **Delete from YouTube**): removes the video from your channel permanently, and from
+  the phone too. Android asks to confirm the phone part.
+
+A phone video whose YouTube copy you deleted is marked **don't back up**, so it isn't uploaded again by itself.
 
 ## Library
 

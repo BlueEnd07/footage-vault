@@ -190,6 +190,43 @@ fun NameDialog(title: String, initial: String = "", confirm: String = "Save", on
     )
 }
 
+/**
+ * Delete: from the phone only (keeps YouTube), or everywhere (YouTube permanently + phone).
+ * Android still shows its own confirmation for anything on the phone.
+ */
+@Composable
+fun DeleteDialog(items: List<Item>, vm: AppViewModel, onDone: () -> Unit) {
+    val onPhone = items.filter { it.onPhone && it.uri != null }
+    val onYouTube = items.filter { it.ytId != null }
+    val notBackedUp = onPhone.count { it.ytId == null }
+    val n = items.size
+    val what = if (n == 1) "this video" else "these $n videos"
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text(if (n == 1) "Delete video?" else "Delete $n videos?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onYouTube.isNotEmpty())
+                    Text("Delete everywhere removes $what from YouTube permanently. It can't be undone.")
+                if (onPhone.isNotEmpty() && onYouTube.isNotEmpty())
+                    Text("Delete from phone frees space and keeps the YouTube copy.")
+                if (notBackedUp > 0)
+                    Text("$notBackedUp ${if (notBackedUp == 1) "isn't" else "aren't"} backed up yet: deleting from the phone removes ${if (notBackedUp == 1) "it" else "them"} for good.",
+                        color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                if (onYouTube.isNotEmpty()) TextButton(onClick = { vm.deleteEverywhere(items); onDone() }) {
+                    Text(if (onPhone.isEmpty()) "Delete from YouTube" else "Delete everywhere", color = MaterialTheme.colorScheme.error)
+                }
+                if (onPhone.isNotEmpty()) TextButton(onClick = { vm.removeFromPhone(onPhone); onDone() }) { Text("Delete from phone") }
+                TextButton(onClick = onDone) { Text("Cancel") }
+            }
+        },
+    )
+}
+
 @Composable
 fun ConfirmDialog(title: String, text: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(text) },

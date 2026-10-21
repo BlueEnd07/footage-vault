@@ -294,7 +294,7 @@ private fun Badge(item: Item, compact: Boolean, modifier: Modifier) {
         }
         "processing" -> Icon(Icons.Outlined.CloudUpload, "Processing on YouTube", tint = Color.White,
             modifier = modifier.size(s).background(Color.Black.copy(alpha = .55f), CircleShape).padding(if (compact) 2.dp else 4.dp))
-        "local", "queued" -> Icon(Icons.Outlined.CloudOff, "Not backed up", tint = Color.White,
+        "local", "queued", "excluded" -> Icon(Icons.Outlined.CloudOff, "Not backed up", tint = Color.White,
             modifier = modifier.size(s).background(red, CircleShape).padding(if (compact) 2.dp else 4.dp))
         "failed" -> Icon(Icons.Outlined.ErrorOutline, "Backup failed", tint = Color.White,
             modifier = modifier.size(s).background(red, CircleShape).padding(if (compact) 1.dp else 3.dp))

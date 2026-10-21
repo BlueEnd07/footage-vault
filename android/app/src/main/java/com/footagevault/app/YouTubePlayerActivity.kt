@@ -18,7 +18,22 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.TextView
+import android.app.AlertDialog
+import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.core.view.WindowCompat
+import com.footagevault.app.data.Db
+import com.footagevault.app.net.ApiException
+import com.footagevault.app.net.Auth
+import com.footagevault.app.net.YouTube
+import com.footagevault.app.work.BackupWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.footagevault.app.data.Prefs
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -38,23 +53,28 @@ import kotlin.math.abs
  */
 class YouTubePlayerActivity : Activity() {
     private lateinit var web: WebView
-    private lateinit var label: TextView
+    private lateinit var topBar: LinearLayout
+    private lateinit var favBtn: ImageButton
     private lateinit var prev: TextView
     private lateinit var next: TextView
     private var customView: View? = null
     private var ids: Array<String> = emptyArray()
     private var labels: Array<String> = emptyArray()
+    private var itemIds: LongArray = LongArray(0)  // Footage Vault item per position (for favourite / delete)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var index = 0
     private lateinit var prefs: Prefs
     private var playingId = ""  // video currently in the player
     private val ui = Handler(Looper.getMainLooper())
-    private val hideChrome = Runnable { listOf(label, prev, next).forEach { it.animate().alpha(0f).setDuration(250).start() } }
+    private val hideChrome = Runnable { chrome().forEach { it.animate().alpha(0f).setDuration(250).start() } }
+    private fun chrome() = listOf<View>(topBar, prev, next)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ids = intent.getStringArrayExtra(EXTRA_IDS) ?: arrayOf(intent.getStringExtra(EXTRA_ID) ?: return finish())
         labels = intent.getStringArrayExtra(EXTRA_LABELS) ?: Array(ids.size) { "" }
+        itemIds = intent.getLongArrayExtra(EXTRA_ITEM_IDS) ?: LongArray(ids.size) { -1 }
         index = savedInstanceState?.getInt("index") ?: intent.getIntExtra(EXTRA_INDEX, 0)
         if (ids.getOrNull(index).isNullOrBlank()) return finish()
 
@@ -86,13 +106,18 @@ class YouTubePlayerActivity : Activity() {
         }
         root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
-        label = TextView(this).apply {
-            setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-            background = GradientDrawable().apply { cornerRadius = dp(16).toFloat(); setColor(0x99000000.toInt()) }
+        topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x99000000.toInt(), 0x00000000))
+            addView(iconButton(R.drawable.ic_back, "Back") { finishWithIndex(handoff = false) })
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            favBtn = iconButton(R.drawable.ic_fav_border, "Favourite") { toggleFavourite() }
+            addView(favBtn)
+            addView(iconButton(R.drawable.ic_delete, "Delete") { confirmDelete() })
         }
-        root.addView(label, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(16) })
+        root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         prev = arrow("‹") { step(-1) }
         next = arrow("›") { step(1) }
         root.addView(prev, FrameLayout.LayoutParams(dp(48), dp(64), Gravity.START or Gravity.CENTER_VERTICAL).apply { marginStart = dp(8) })
@@ -107,6 +132,64 @@ class YouTubePlayerActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private fun iconButton(icon: Int, desc: String, onClick: () -> Unit) = ImageButton(this).apply {
+        setImageResource(icon); contentDescription = desc
+        background = null
+        setPadding(dp(12), dp(12), dp(12), dp(12))
+        setOnClickListener { onClick(); showChrome() }
+    }
+
+    private fun currentItem() = itemIds.getOrNull(index)?.takeIf { it >= 0 }?.let { Db.get(this).item(it) }
+
+    private fun updateFavIcon() {
+        favBtn.setImageResource(if (currentItem()?.favorite == true) R.drawable.ic_fav else R.drawable.ic_fav_border)
+    }
+
+    /** Favourite: saved here, pushed to the Favourites playlist by the next backup run. */
+    private fun toggleFavourite() {
+        val it = currentItem() ?: return
+        Db.get(this).update(it.id, "favorite" to !it.favorite, "fav_synced" to false)
+        BackupWorker.runNow(this)
+        updateFavIcon()
+        Toast.makeText(this, if (it.favorite) "Removed from Favourites" else "Added to Favourites", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Delete from YouTube, permanently (only videos that play here, i.e. not on the phone). */
+    private fun confirmDelete() {
+        val it = currentItem() ?: return
+        val ytId = it.ytId ?: return
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Delete from YouTube?")
+            .setMessage("This video is deleted from your channel permanently. It can't be undone.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val yt = YouTube { Auth.silentToken(this@YouTubePlayerActivity) ?: throw ApiException(401, "Sign in to YouTube first") }
+                            try { yt.deleteVideo(ytId) } catch (e: ApiException) { if (!e.isNotFound) throw e }
+                            val db = Db.get(this@YouTubePlayerActivity)
+                            if (it.onPhone) db.update(it.id, "yt_id" to null, "status" to "excluded", "privacy" to null) else db.delete(it.id)
+                        }
+                    }
+                    if (ok.isFailure) {
+                        Toast.makeText(this@YouTubePlayerActivity, "Couldn't delete: ${ok.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    Toast.makeText(this@YouTubePlayerActivity, "Deleted from YouTube", Toast.LENGTH_SHORT).show()
+                    prefs.setResumeAt("y$ytId", 0)
+                    ids[index] = ""
+                    // Move on to the next playable video (or back), else close.
+                    val nextIdx = (index + 1 until ids.size).firstOrNull { ids[it].isNotBlank() }
+                        ?: (index - 1 downTo 0).firstOrNull { ids[it].isNotBlank() }
+                    if (nextIdx == null) { playingId = ""; finishWithIndex(handoff = false); return@launch }
+                    playingId = ""
+                    step(nextIdx - index)
+                }
+            }
+            .show()
+    }
+
     private fun arrow(text: String, onClick: () -> Unit) = TextView(this).apply {
         this.text = text; gravity = Gravity.CENTER
         setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 34f)
@@ -115,11 +198,10 @@ class YouTubePlayerActivity : Activity() {
     }
 
     private fun showChrome() {
-        label.text = labels.getOrNull(index).orEmpty()
-        label.visibility = if (label.text.isNullOrBlank()) View.GONE else View.VISIBLE
+        updateFavIcon()
         prev.visibility = if (index > 0) View.VISIBLE else View.INVISIBLE
         next.visibility = if (index < ids.size - 1) View.VISIBLE else View.INVISIBLE
-        listOf(label, prev, next).forEach { it.animate().cancel(); it.alpha = 1f }
+        chrome().forEach { it.animate().cancel(); it.alpha = 1f }
         ui.removeCallbacks(hideChrome)
         ui.postDelayed(hideChrome, 2500)
     }
@@ -172,7 +254,7 @@ class YouTubePlayerActivity : Activity() {
 
     override fun onPause() { super.onPause(); web.onPause() }
     override fun onResume() { super.onResume(); web.onResume() }
-    override fun onDestroy() { ui.removeCallbacksAndMessages(null); web.destroy(); super.onDestroy() }
+    override fun onDestroy() { ui.removeCallbacksAndMessages(null); scope.cancel(); web.destroy(); super.onDestroy() }
 
     /** Lets taps reach YouTube's controls but takes clear horizontal swipes for itself. */
     private class SwipeLayout(ctx: Context, val onSwipe: (Int) -> Unit, val onDown: () -> Unit, val onTouch: () -> Unit) : FrameLayout(ctx) {
@@ -217,11 +299,12 @@ class YouTubePlayerActivity : Activity() {
         private const val EXTRA_ID = "yt_id"
         private const val EXTRA_IDS = "yt_ids"
         private const val EXTRA_LABELS = "labels"
+        private const val EXTRA_ITEM_IDS = "item_ids"
         private const val ORIGIN = "https://com.footagevault.app"
 
-        fun intent(ctx: Context, ids: Array<String>, labels: Array<String>, index: Int) =
+        fun intent(ctx: Context, ids: Array<String>, labels: Array<String>, index: Int, itemIds: LongArray) =
             Intent(ctx, YouTubePlayerActivity::class.java)
-                .putExtra(EXTRA_IDS, ids).putExtra(EXTRA_LABELS, labels).putExtra(EXTRA_INDEX, index)
+                .putExtra(EXTRA_IDS, ids).putExtra(EXTRA_LABELS, labels).putExtra(EXTRA_INDEX, index).putExtra(EXTRA_ITEM_IDS, itemIds)
 
         /** YouTube IFrame API, so the next video loads in the same player (no page reload). */
         private fun html(id: String, start: Long) = """
