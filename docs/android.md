@@ -63,9 +63,11 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
    **Choose videos**, which opens Android's photo picker (it shows Google Photos videos and albums too when the
    phone's picker is linked to Google Photos).
 2. Optionally type an **album** name, or tap one of your albums. Tap **Back up**.
-3. Keep the screen open while the videos are copied into the app. Then they upload in the background like phone
-   videos, under the same Wi-Fi / charging rules, with their **file name, recording date and GPS** from the files (GPS only if the shared file still has it).
-   With an album name they go into that album (a YouTube playlist, made if it doesn't exist).
+3. You can close the screen. The videos are downloaded into the app in the background, three at a time, with a
+   progress notification. **Uploads wait until every video is downloaded**, so the two don't share the connection.
+   Then they upload like phone videos, under the same Wi-Fi / charging rules, with their **file name, recording date
+   and GPS** from the files (GPS only if the shared file still has it). With an album name they go into that album
+   (a YouTube playlist, made if it doesn't exist). **Library → Uploading** shows how it's going.
 4. The app's copies are deleted once YouTube has finished processing them.
 
 - Videos already in your library (same file name and size or length) are skipped, and the app checks your channel

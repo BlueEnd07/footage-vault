@@ -71,7 +71,7 @@ object Importer {
     }
 
     /** Copies one video in, reads its details and queues it for backup (into [album] if given). */
-    fun import(ctx: Context, src: Source, album: String?, onBytes: (Long) -> Unit): Result {
+    fun import(ctx: Context, src: Source, album: String?, status: String = "queued", onBytes: (Long) -> Unit): Result {
         val db = Db.get(ctx)
         if (known(db, src.name, src.size, null)) return Result.DUPLICATE
         val file = File(dir(ctx), "${System.currentTimeMillis()}_${src.name.replace(Regex("""[\\/:*?"<>|]"""), "_")}")
@@ -112,7 +112,7 @@ object Importer {
         val recorded = TimeGuess.forPhone(src.name, taken, file.lastModified())
         db.insert(cv(
             "uri" to Uri.fromFile(file).toString(), "name" to src.name, "size" to file.length(), "duration_ms" to durationMs,
-            "width" to w, "height" to h, "recorded" to recorded, "bucket" to BUCKET, "status" to "queued",
+            "width" to w, "height" to h, "recorded" to recorded, "bucket" to BUCKET, "status" to status,
             "lat" to lat, "lon" to lon, "geo_checked" to false, "pending_album" to album?.trim()?.ifBlank { null },
         ))
         return Result.ADDED
@@ -125,6 +125,14 @@ object Importer {
         if (y.toInt() < 1990) return 0
         return runCatching { LocalDateTime.of(y.toInt(), mo.toInt(), d.toInt(), hh.toInt(), mi.toInt(), ss.toInt()).toInstant(ZoneOffset.UTC).toEpochMilli() }
             .getOrDefault(0)
+    }
+
+    /** After the app was closed mid-import: finished copies go to the uploader, half-copied files are removed. */
+    fun recover(ctx: Context) {
+        val db = Db.get(ctx)
+        for (it in db.items("status='copied'")) db.update(it.id, "status" to "queued")
+        val used = db.items("uri LIKE 'file:%'").mapNotNull { it.uri?.let(Uri::parse)?.path }.toSet()
+        dir(ctx).listFiles()?.forEach { f -> if (f.path !in used) f.delete() }
     }
 
     /** Deletes the app's own copy of an imported video. */

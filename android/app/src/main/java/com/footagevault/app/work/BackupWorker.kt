@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.footagevault.app.data.Db
+import com.footagevault.app.data.Importer
 import com.footagevault.app.data.MediaScanner
 import com.footagevault.app.data.Prefs
 import com.footagevault.app.net.ApiException
@@ -38,6 +39,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     }
 
     override suspend fun doWork(): Result {
+        if (!ImportService.running) Importer.recover(applicationContext)
         MediaScanner.scan(applicationContext)
         MediaScanner.fillLocations(applicationContext)
         if (!prefs.signedIn) return Result.success()
@@ -72,6 +74,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     private suspend fun uploadQueued(sync: Sync, yt: YouTube, refreshToken: suspend () -> Unit) {
         if (prefs.userPaused || System.currentTimeMillis() < prefs.pausedUntil) return
+        if (ImportService.running) return  // copying from Google Photos first; uploads start when it's done
         while (!isStopped) {
             val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3", order = "recorded ASC").firstOrNull() ?: return
             val left = db.items("status IN ('queued','uploading') AND on_phone=1").size

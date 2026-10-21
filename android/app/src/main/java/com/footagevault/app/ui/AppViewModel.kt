@@ -15,6 +15,7 @@ import com.footagevault.app.net.Auth
 import com.footagevault.app.net.Updater
 import com.footagevault.app.net.YouTube
 import com.footagevault.app.work.BackupWorker
+import com.footagevault.app.work.ImportService
 import com.footagevault.app.work.Sync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -120,6 +121,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             prefs.userPaused -> "Backup is paused" to "Turn off Pause backup in Settings."
             System.currentTimeMillis() < prefs.pausedUntil -> "YouTube's daily limit is reached" to
                 "YouTube only allows a few uploads a day for your Google project. They continue by themselves after $resume."
+            ImportService.progress.value != null -> ImportService.progress.value!!.let { c ->
+                "Copying from Google Photos" to "${c.done} of ${c.total} copied (${BackupWorker.fmtSize(c.bytes)} of ${BackupWorker.fmtSize(c.totalBytes)}). " +
+                    "Uploads start when all are copied. You can close the app."
+            }
             up != null -> "Uploading ${up.name}" to "${(up.progress * 100).toInt()}% · $waiting left"
             waiting == 0 -> "YouTube is processing" to "${pending.size} uploaded. YouTube is finishing them, which can take a while for long videos."
             !online -> "No internet" to "Uploads start when the phone is online."

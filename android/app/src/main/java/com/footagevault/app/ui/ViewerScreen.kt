@@ -393,6 +393,7 @@ private fun InfoSheet(it: Item, onChangeDate: () -> Unit) {
             "backed_up", "youtube" -> Icons.Outlined.CloudDone to "Backed up to YouTube"
             "failed" -> Icons.Outlined.ErrorOutline to "Backup failed"
             "local" -> Icons.Outlined.Smartphone to "Only on this phone (folder not backed up)"
+            "copied" -> Icons.Outlined.CloudUpload to "Copied · uploads once the rest are copied"
             "processing" -> Icons.Outlined.CloudUpload to "Uploaded · YouTube is processing"
             "uploading" -> Icons.Outlined.CloudUpload to "Uploading · ${(it.progress * 100).toInt()}%"
             else -> Icons.Outlined.CloudUpload to "Waiting to back up"

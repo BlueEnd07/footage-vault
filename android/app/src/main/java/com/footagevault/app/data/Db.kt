@@ -55,7 +55,7 @@ data class Item(
     /** A copy shared in from another app (Google Photos), kept in the app's own storage until it's backed up. */
     val isImport get() = uri?.startsWith("file:") == true
     val isBackedUp get() = status == "backed_up" || status == "youtube"
-    val isPending get() = status == "queued" || status == "uploading" || status == "processing"
+    val isPending get() = status == "copied" || status == "queued" || status == "uploading" || status == "processing"
     val thumbModel: Any?
         get() = if (onPhone && uri != null) android.net.Uri.parse(uri)
         else ytId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.footagevault.app"
         minSdk = 30          // Android 11+: one-tap system delete (MediaStore.createDeleteRequest)
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.9.2"
+        versionCode = 13
+        versionName = "1.10"
     }
 
     buildTypes {

@@ -60,8 +60,11 @@ video too. Videos whose folder or file name contains "gif" are not listed or upl
 
 ## Google Photos imports (Android)
 
-`ImportActivity` takes `SEND` / `SEND_MULTIPLE` shares. Share URIs only work while that screen is open, so each video
-is copied to `files/imports/` and added as a queued item (`uri` = `file:…`, bucket *Google Photos*), with its
+`ImportActivity` takes `SEND` / `SEND_MULTIPLE` shares (and Settings → Choose videos). It hands the URIs, with the
+read grant, to `ImportService`, a foreground service that keeps them usable after the screen closes. The service
+copies three at a time to `files/imports/`, adding each as a `copied` item (`uri` = `file:…`, bucket *Google
+Photos*). While it runs, `BackupWorker` doesn't upload; when all are copied they become `queued` in one go
+(`Importer.recover` does the same after an interrupted import and removes half-copied files). Each item gets its
 recording time from the MP4 creation date (and the file name, per the date rules), size, length and GPS read from
 the file. A duplicate check (name + size or length) runs before and after copying, and `lastPull` is reset so the
 next run matches against the channel first. An album name is kept in `pending_album` and applied once the video has

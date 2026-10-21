@@ -54,6 +54,7 @@ import com.footagevault.app.data.Prefs
 import com.footagevault.app.ui.VaultTheme
 import com.footagevault.app.ui.isDark
 import com.footagevault.app.work.BackupWorker
+import com.footagevault.app.work.ImportService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,8 +96,8 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     sealed interface State {
         data object Reading : State
         data class Ready(val videos: List<Importer.Source>, val skipped: Int, val albums: List<String>, val freeBytes: Long) : State
-        data class Copying(val index: Int, val total: Int, val name: String, val fraction: Float) : State
-        data class Done(val added: Int, val duplicates: Int, val failed: Int, val album: String?) : State
+        /** Handed to the background copier (ImportService). */
+        data class Started(val count: Int, val album: String?) : State
     }
     private val _state = MutableStateFlow<State>(State.Reading)
     val state = _state.asStateFlow()
@@ -109,32 +110,14 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
     fun start(album: String?) {
         val ready = _state.value as? State.Ready ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            var added = 0; var dup = 0; var failed = 0
-            ready.videos.forEachIndexed { i, src ->
-                _state.value = State.Copying(i, ready.videos.size, src.name, 0f)
-                when (Importer.import(ctx, src, album) { bytes ->
-                    if (src.size > 0) _state.value = State.Copying(i, ready.videos.size, src.name, (bytes.toFloat() / src.size).coerceAtMost(1f))
-                }) {
-                    Importer.Result.ADDED -> added++
-                    Importer.Result.DUPLICATE -> dup++
-                    Importer.Result.FAILED -> failed++
-                }
-            }
-            if (added > 0) {
-                Prefs(ctx).lastPull = 0L  // check the channel first, so nothing already there goes up twice
-                BackupWorker.runNow(ctx, after = true)
-            }
-            _state.value = State.Done(added, dup, failed, album?.trim()?.ifBlank { null })
-        }
+        ImportService.start(ctx, ready.videos, album)
+        _state.value = State.Started(ready.videos.size, album?.trim()?.ifBlank { null })
     }
 }
 
 @Composable
 private fun ImportScreen(vm: ImportViewModel, signedIn: Boolean, onClose: () -> Unit, onOpenApp: () -> Unit) {
     val state by vm.state.collectAsState()
-    // Share links stop working once this screen closes: don't leave halfway through copying.
-    BackHandler(enabled = state is ImportViewModel.State.Copying) {}
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.CloudUpload, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
@@ -144,30 +127,18 @@ private fun ImportScreen(vm: ImportViewModel, signedIn: Boolean, onClose: () -> 
         when (val s = state) {
             ImportViewModel.State.Reading -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             is ImportViewModel.State.Ready -> ReadyPane(s, signedIn, onClose, vm::start)
-            is ImportViewModel.State.Copying -> {
-                Text("Copying ${s.index + 1} of ${s.total}", style = MaterialTheme.typography.titleMedium)
-                LinearProgressIndicator(progress = { (s.index + s.fraction) / s.total }, modifier = Modifier.fillMaxWidth())
-                Text(s.name, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                Text("Keep this screen open until copying is done. Uploading happens afterwards in the background.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            is ImportViewModel.State.Done -> {
-                Text(when {
-                    s.added == 0 && s.duplicates > 0 -> "Already in your library"
-                    s.added == 0 -> "Nothing was added"
-                    else -> "${s.added} video${if (s.added == 1) "" else "s"} added"
-                }, style = MaterialTheme.typography.titleMedium)
+            is ImportViewModel.State.Started -> {
+                Text("Copying ${s.count} video${if (s.count == 1) "" else "s"} in the background", style = MaterialTheme.typography.titleMedium)
                 val lines = buildList {
-                    if (s.added > 0) add(if (signedIn) "They'll upload to YouTube in the background with their date, place and name" +
-                        (s.album?.let { " and go into the album \"$it\"" } ?: "") + "." else "Sign in in the app to start uploading them.")
-                    if (s.duplicates > 0) add("${s.duplicates} skipped: already in your library.")
-                    if (s.failed > 0) add("${s.failed} couldn't be copied. Share them again.")
-                    if (s.added > 0) add("In your timeline they're on the days they were filmed. See uploads shows them and how the upload is going.")
-                    if (s.added > 0) add("The app's copies are deleted once YouTube has them.")
+                    add("You can close this. Progress is in your notifications.")
+                    add("All videos are downloaded first, a few at a time. Then they upload to YouTube with their date, place and name" +
+                        (s.album?.let { " and go into the album \"$it\"" } ?: "") + ".")
+                    if (!signedIn) add("Sign in in the app to start uploading them.")
+                    add("In your timeline they're on the days they were filmed. See uploads shows how it's going.")
                 }
                 lines.forEach { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onOpenApp) { Text(if (s.added > 0) "See uploads" else "Open Footage Vault") }
+                    Button(onClick = onOpenApp) { Text("See uploads") }
                     TextButton(onClick = onClose) { Text("Done") }
                 }
             }
