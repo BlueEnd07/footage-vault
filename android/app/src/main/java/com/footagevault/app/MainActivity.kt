@@ -1,0 +1,350 @@
+package com.footagevault.app
+
+import android.app.Activity
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.LibraryAdd
+import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material.icons.outlined.PauseCircle
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.footagevault.app.data.Item
+import com.footagevault.app.net.Auth
+import com.footagevault.app.ui.AlbumPicker
+import com.footagevault.app.ui.AppViewModel
+import com.footagevault.app.ui.ConfirmDialog
+import com.footagevault.app.ui.Filter
+import com.footagevault.app.ui.LibraryScreen
+import com.footagevault.app.ui.MapScreen
+import com.footagevault.app.ui.NameDialog
+import com.footagevault.app.ui.Onboarding
+import com.footagevault.app.ui.SettingsScreen
+import com.footagevault.app.ui.VaultTheme
+import com.footagevault.app.ui.VideoGrid
+import com.footagevault.app.ui.ViewerScreen
+import com.footagevault.app.work.BackupWorker
+
+class MainActivity : ComponentActivity() {
+    private val vm: AppViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val startScreen = intent.getStringExtra("screen")
+        setContent { VaultTheme { Root(vm, startScreen) } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (vm.prefs.onboarded) vm.rescan()
+    }
+}
+
+private sealed interface Page {
+    data object Videos : Page
+    data object Library : Page
+    data object Map : Page
+    data class Album(val pid: String) : Page
+    data class Event(val key: String) : Page
+    data class Filtered(val f: Filter) : Page
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Root(vm: AppViewModel, startScreen: String?) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var onboarded by remember { mutableStateOf(vm.prefs.onboarded) }
+    val items by vm.items.collectAsState()
+    val albums by vm.albums.collectAsState()
+    val events by vm.events.collectAsState()
+    val signedIn by vm.signedIn.collectAsState()
+    val busy by vm.busy.collectAsState()
+    val update by vm.update.collectAsState()
+    val updateProgress by vm.updateProgress.collectAsState()
+    LaunchedEffect(Unit) { vm.checkForUpdate() }
+    var page by remember { mutableStateOf<Page>(when (startScreen) { "free" -> Page.Filtered(Filter.FREE); "problems" -> Page.Filtered(Filter.PROBLEMS); else -> Page.Videos }) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var viewer by remember { mutableStateOf<Pair<List<Item>, Int>?>(null) }
+    val selected = remember { mutableStateListOf<Long>() }
+    var picker by remember { mutableStateOf<List<Item>?>(null) }
+    var dialog by remember { mutableStateOf<String?>(null) }  // "newAlbum" | "rename" | "deleteAlbum" | "saveEvent"
+    val snack = remember { SnackbarHostState() }
+
+    // System prompts: Google consent, and Android's "delete these videos?" confirmation
+    val authLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        if (r.resultCode == Activity.RESULT_OK && Auth.tokenFromIntent(ctx, r.data) != null) vm.onSignedIn()
+        else vm.say("Sign-in was cancelled")
+    }
+    val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        vm.onDeleteResult(r.resultCode == Activity.RESULT_OK)
+    }
+    LaunchedEffect(Unit) {
+        vm.intents.collect { si ->
+            val req = IntentSenderRequest.Builder(si.pi.intentSender).build()
+            if (si.kind == "auth") authLauncher.launch(req) else deleteLauncher.launch(req)
+        }
+    }
+    LaunchedEffect(Unit) { vm.messages.collect { snack.showSnackbar(it) } }
+
+    if (!onboarded) { Onboarding(vm) { onboarded = true }; return }
+    if (showSettings) { SettingsScreen(vm) { showSettings = false }; return }
+
+    val selecting = selected.isNotEmpty()
+    BackHandler(enabled = selecting || page !is Page.Videos) {
+        when {
+            selecting -> selected.clear()
+            page is Page.Album || page is Page.Event || page is Page.Filtered -> page = Page.Library
+            else -> page = Page.Videos
+        }
+    }
+    val tab = when (page) { Page.Videos -> 0; Page.Map -> 2; else -> 1 }
+    val shown: List<Item> = when (val p = page) {
+        is Page.Album -> albums.firstOrNull { it.playlistId == p.pid }?.ytIds?.toSet().orEmpty().let { ids -> items.filter { it.ytId in ids } }
+        is Page.Event -> events.firstOrNull { it.key == p.key }?.items.orEmpty().sortedByDescending { it.recorded }
+        is Page.Filtered -> items.filter(p.f::test)
+        else -> items
+    }
+    fun toggle(it: Item) { if (it.id in selected) selected.remove(it.id) else selected.add(it.id) }
+    val selItems = items.filter { it.id in selected }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snack) },
+        topBar = {
+            if (selecting) TopAppBar(
+                title = { Text("${selected.size} selected") },
+                navigationIcon = { IconButton(onClick = { selected.clear() }) { Icon(Icons.Filled.Close, "Cancel") } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                actions = {
+                    val allFav = selItems.all { it.favorite }
+                    IconButton(onClick = { vm.setFavorite(selected.toList(), !allFav); selected.clear() }) { Icon(Icons.Outlined.FavoriteBorder, "Favourite") }
+                    IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
+                    if (selItems.any { it.onPhone && it.status == "backed_up" })
+                        IconButton(onClick = { vm.freeUpSpace(selItems.filter { it.onPhone && it.status == "backed_up" }); selected.clear() }) {
+                            Icon(Icons.Outlined.DeleteSweep, "Remove from phone")
+                        }
+                },
+            )
+            else TopAppBar(
+                title = {
+                    when (val p = page) {
+                        is Page.Album, is Page.Event, is Page.Filtered -> Text(when (p) {
+                            is Page.Album -> albums.firstOrNull { it.playlistId == p.pid }?.name ?: "Album"
+                            is Page.Event -> events.firstOrNull { it.key == p.key }?.name ?: "Event"
+                            is Page.Filtered -> p.f.title
+                            else -> ""
+                        }, maxLines = 1)
+                        else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(painterResource(R.drawable.ic_logo), null, Modifier.size(28.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("Footage ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Vault", fontWeight = FontWeight.Medium)
+                        }
+                    }
+                },
+                navigationIcon = {
+                    if (page is Page.Album || page is Page.Event || page is Page.Filtered)
+                        IconButton(onClick = { page = Page.Library }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                },
+                actions = {
+                    StatusPill(items, signedIn, vm, onSignIn = vm::signIn, onOpen = { page = Page.Filtered(Filter.UPLOADING) })
+                    IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, "Settings") }
+                },
+            )
+        },
+        bottomBar = {
+            if (!selecting) NavigationBar {
+                NavItem(tab == 0, Icons.Filled.VideoLibrary, Icons.Outlined.VideoLibrary, "Videos") { page = Page.Videos }
+                NavItem(tab == 1, Icons.Filled.PhotoLibrary, Icons.Outlined.PhotoLibrary, "Library") { page = Page.Library }
+                NavItem(tab == 2, Icons.Filled.Map, Icons.Outlined.Map, "Map") { page = Page.Map }
+            }
+        },
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            when (val p = page) {
+                Page.Library -> LibraryScreen(items, albums, events,
+                    onFilter = { page = Page.Filtered(it) }, onAlbum = { page = Page.Album(it) },
+                    onEvent = { page = Page.Event(it) }, onNewAlbum = { dialog = "newAlbum" })
+                Page.Map -> MapScreen(items) { it, list -> viewer = list to list.indexOf(it) }
+                else -> PullToRefreshBox(isRefreshing = busy, onRefresh = vm::refresh) {
+                    VideoGrid(
+                        shown, selected.toSet(), selecting,
+                        onOpen = { viewer = shown to shown.indexOf(it) }, onToggle = ::toggle,
+                        onToggleDay = { day -> if (day.all { it.id in selected }) selected.removeAll(day.map { it.id }.toSet()) else day.forEach { if (it.id !in selected) selected.add(it.id) } },
+                        header = {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Column {
+                                    update?.let { u ->
+                                        val prog = updateProgress
+                                        Notice(Icons.Outlined.SystemUpdate, "Update available: ${u.name}",
+                                            if (prog != null) "Downloading… ${(prog * 100).toInt()}%" else u.notes.lines().firstOrNull { it.isNotBlank() } ?: "Tap Update to install it.",
+                                            if (prog != null) "…" else "Update") { if (prog == null) vm.installUpdate() }
+                                    }
+                                    if (!signedIn) Notice(Icons.Outlined.CloudOff, "Sign in to start backing up", "Your videos stay on the phone until then.", "Sign in", vm::signIn)
+                                    if (p is Page.Videos || (p is Page.Filtered && p.f == Filter.FREE)) {
+                                        val free = vm.freeCandidates()
+                                        if (free.isNotEmpty()) Notice(Icons.Outlined.DeleteSweep, "Free up ${BackupWorker.fmtSize(free.sumOf { it.size })}",
+                                            "${free.size} video${if (free.size == 1) " is" else "s are"} safely backed up to YouTube.", "Free up space") { vm.freeUpSpace() }
+                                    }
+                                    when (p) {
+                                        is Page.Album -> Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            FilledTonalButton(onClick = { dialog = "rename" }) { Text("Rename") }
+                                            TextButton(onClick = { dialog = "deleteAlbum" }) { Text("Delete album") }
+                                        }
+                                        is Page.Event -> Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                                            Button(onClick = { dialog = "saveEvent" }) { Text("Save as album") }
+                                        }
+                                        else -> {}
+                                    }
+                                    if (shown.isEmpty()) Text(
+                                        when (p) { is Page.Filtered -> p.f.empty; is Page.Album -> "Select videos and tap Add to album."; else -> "No videos yet." },
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp),
+                                    )
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    viewer?.let { (list, start) ->
+        if (list.isEmpty()) { viewer = null; return@let }
+        ViewerScreen(list, start, vm, onClose = { viewer = null }, onAddToAlbum = { picker = listOf(it) })
+    }
+    picker?.let { list ->
+        AlbumPicker(albums, list,
+            onPick = { pid -> vm.addToAlbum(pid, list); picker = null; selected.clear() },
+            onNew = { name -> vm.createAlbum(name, list); picker = null; selected.clear() },
+            onDismiss = { picker = null })
+    }
+    when (dialog) {
+        "newAlbum" -> NameDialog("New album", confirm = "Create", onDone = { vm.createAlbum(it); dialog = null }) { dialog = null }
+        "rename" -> (page as? Page.Album)?.let { p ->
+            NameDialog("Rename album", albums.firstOrNull { it.playlistId == p.pid }?.name.orEmpty(), onDone = { vm.renameAlbum(p.pid, it); dialog = null }) { dialog = null }
+        }
+        "deleteAlbum" -> (page as? Page.Album)?.let { p ->
+            ConfirmDialog("Delete album?", "Its YouTube playlist is deleted too. The videos stay.", "Delete",
+                onConfirm = { vm.deleteAlbum(p.pid); dialog = null; page = Page.Library }) { dialog = null }
+        }
+        "saveEvent" -> (page as? Page.Event)?.let { p ->
+            val e = events.firstOrNull { it.key == p.key }
+            NameDialog("Save as album", e?.name.orEmpty(), onDone = { vm.createAlbum(it, e?.items.orEmpty()); dialog = null }) { dialog = null }
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.NavItem(sel: Boolean, on: ImageVector, off: ImageVector, label: String, onClick: () -> Unit) =
+    NavigationBarItem(selected = sel, onClick = onClick, icon = { Icon(if (sel) on else off, null) }, label = { Text(label) })
+
+@Composable
+private fun Notice(icon: ImageVector, title: String, text: String, action: String, onAction: () -> Unit) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.Medium)
+                    Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) { FilledTonalButton(onClick = onAction) { Text(action) } }
+        }
+    }
+}
+
+/** Backup state, like Google Photos' avatar ring: backed up / N left / waiting for Wi-Fi / paused / problems. */
+@Composable
+private fun StatusPill(items: List<Item>, signedIn: Boolean, vm: AppViewModel, onSignIn: () -> Unit, onOpen: () -> Unit) {
+    val pending = items.count { it.isPending }
+    val failed = items.count { it.status == "failed" }
+    val up = items.firstOrNull { it.status == "uploading" }
+    val (icon, text, action) = when {
+        !signedIn -> Triple(Icons.Outlined.CloudOff, "Sign in", onSignIn)
+        vm.prefs.userPaused && pending > 0 -> Triple(Icons.Outlined.PauseCircle, "Paused", onOpen)
+        System.currentTimeMillis() < vm.prefs.pausedUntil && pending > 0 -> Triple(Icons.Outlined.PauseCircle, "Daily limit", onOpen)
+        up != null -> Triple(null, "$pending left", onOpen)
+        pending > 0 -> Triple(if (vm.prefs.wifiOnly) Icons.Outlined.Wifi else Icons.Outlined.CloudOff, "$pending waiting", onOpen)
+        failed > 0 -> Triple(Icons.Outlined.ErrorOutline, "$failed problem${if (failed == 1) "" else "s"}", onOpen)
+        else -> Triple(Icons.Outlined.CloudDone, "Backed up", onOpen)
+    }
+    Surface(onClick = action, shape = RoundedCornerShape(18.dp),
+        color = if (up != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (icon == null) CircularProgressIndicator(progress = { up?.progress?.coerceAtLeast(.05f) ?: 0f }, modifier = Modifier.size(18.dp), strokeWidth = 2.5.dp)
+            else Icon(icon, null, Modifier.size(18.dp), tint = if (text == "Backed up") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(6.dp))
+            Text(text, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}

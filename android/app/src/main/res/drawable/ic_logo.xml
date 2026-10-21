@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Footage Vault logo: a vault box with a play button (same as the PC app icon). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp" android:height="96dp" android:viewportWidth="96" android:viewportHeight="96">
+    <path android:fillColor="#111214" android:pathData="M21,0h54a21,21 0,0 1,21 21v54a21,21 0,0 1,-21 21h-54a21,21 0,0 1,-21 -21v-54a21,21 0,0 1,21 -21z"/>
+    <path android:strokeColor="#5B8CFF" android:strokeWidth="5.3" android:fillColor="#00000000"
+        android:pathData="M24,19h48a8.6,8.6 0,0 1,8.6 8.6v40.8a8.6,8.6 0,0 1,-8.6 8.6h-48a8.6,8.6 0,0 1,-8.6 -8.6v-40.8a8.6,8.6 0,0 1,8.6 -8.6z"/>
+    <path android:fillColor="#5B8CFF" android:pathData="M41.5,32.5L41.5,63.5L64,48Z"/>
+</vector>

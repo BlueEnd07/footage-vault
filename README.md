@@ -49,6 +49,22 @@ Google Cloud key. [SETUP.md](SETUP.md) section 2 walks you through it:
 "install this". [AGENTS.md](AGENTS.md) tells it exactly what to do, including which steps need you
 (the Google sign-in).
 
+## Android app (no PC needed)
+
+`android/` holds a native Android app (Kotlin, Jetpack Compose). It backs up the camera folder straight to your
+YouTube channel in the background, on Wi-Fi only. It has the same gallery, albums (playlists), favourites, events and
+map, and a one-tap **Free up space** that uses Android's own delete prompt. It reads and writes the same YouTube
+library as the PC app, so both can be used together.
+
+- **Install:** download `FootageVault.apk` from [Releases](https://github.com/BlueEnd07/footage-vault/releases) on the
+  phone and open it. After that, the app updates itself: it shows **Update available** when a new release is out.
+- **Google setup:** in the same Google Cloud project, create an OAuth client of type **Android** with package name
+  `com.footagevault.app` and the SHA-1 of the key the APK is signed with. No client secret is involved.
+- **Build it yourself:** use JDK 17 and the Android SDK (platform 35), then run `cd android && ./gradlew assembleRelease`.
+  If you build with your own signing key, register that key's SHA-1 instead.
+- **Playback:** videos still on the phone play directly. Unlisted or public YouTube videos play in YouTube's player
+  inside the app. Private ones open in the YouTube app, because YouTube doesn't allow embedding private videos.
+
 ## Everyday use
 
 - **Start / stop:** the app starts with Windows. Right-click the tray icon to **Pause uploads** or **Quit**.

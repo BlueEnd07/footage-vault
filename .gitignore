@@ -12,3 +12,6 @@ __pycache__/
 
 # Face models (downloaded automatically on first run)
 models/
+
+# Built app files
+*.apk
