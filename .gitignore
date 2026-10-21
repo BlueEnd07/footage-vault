@@ -1,10 +1,9 @@
-# Secrets — never commit
+# Secrets ??? never commit
 client_secret*.json
 token.json
 
 # Local library (videos, previews, database, PIN)
-data/
-
+/data/
 # Python
 .venv/
 __pycache__/
