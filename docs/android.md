@@ -58,8 +58,10 @@ apps; switch it on, go back and tap Update again. You can also check by hand in 
 ## From Google Photos
 
 Videos already in Google Photos can be moved to YouTube through the share sheet:
-1. In Google Photos, open an album (or any view), select the videos and tap **Share → Footage Vault**
-   (*Back up to YouTube*).
+1. In Google Photos, open an album (or any view), select the videos and tap **Share → Footage Vault**.
+   **Settings → Back up from Google Photos** has the same steps, an **Open Google Photos** button, and
+   **Choose videos**, which opens Android's photo picker (it shows Google Photos videos and albums too when the
+   phone's picker is linked to Google Photos).
 2. Optionally type an **album** name, or tap one of your albums. Tap **Back up**.
 3. Keep the screen open while the videos are copied into the app. Then they upload in the background like phone
    videos, under the same Wi-Fi / charging rules, with their **file name, recording date and GPS** from the files (GPS only if the shared file still has it).
@@ -71,8 +73,8 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
 - Photos and GIFs in the selection are left out.
 - Google Photos downloads cloud-only videos before sharing them, so you need free space for the batch. Large
   batches are best shared a few at a time, on Wi-Fi.
-- Google no longer lets apps read Google Photos albums or share links directly, so selecting and sharing is the way
-  in. For a whole library, use the PC app's [Takeout import](pc-guide.md).
+- Pasting an album link isn't possible: Google no longer lets apps read Google Photos albums or share links, so
+  selecting and sharing is the way in. For a whole library, use the PC app's [Takeout import](pc-guide.md).
 
 ## Gallery
 

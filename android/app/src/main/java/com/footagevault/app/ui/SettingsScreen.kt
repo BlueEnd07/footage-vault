@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.Button
@@ -70,6 +71,10 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
     var tick by remember { mutableIntStateOf(0) }  // re-read prefs after a change
     fun changed() { tick++; vm.settingsChanged() }
     val folders = remember(tick) { MediaScanner.folders(ctx) }
+    // Android's photo picker (shows Google Photos videos and albums too, when the phone links it to Google Photos)
+    val pickVideos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isNotEmpty()) ctx.startActivity(importIntent(ctx, uris))
+    }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
         TopAppBar(title = { Text("Settings") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
@@ -109,6 +114,22 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                         p.backupFrom = if (it) 0L else System.currentTimeMillis(); changed()
                     }
                     Row(Modifier.padding(top = 8.dp)) { Button(onClick = vm::backUpNow) { Text("Back up now") } }
+                }
+
+                Card(Icons.Outlined.PhotoLibrary, "Back up from Google Photos") {
+                    Text("In Google Photos, open an album, select the videos, tap Share and choose Footage Vault. " +
+                        "You can name an album, and the videos upload with their date, place and name.")
+                    Text("Pasting an album link isn't possible: Google stopped letting apps open Google Photos albums in 2025.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            val photos = ctx.packageManager.getLaunchIntentForPackage("com.google.android.apps.photos")
+                            if (photos != null) ctx.startActivity(photos) else vm.say("Google Photos isn't installed")
+                        }) { Text("Open Google Photos") }
+                        OutlinedButton(onClick = {
+                            pickVideos.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        }) { Text("Choose videos") }
+                    }
                 }
 
                 Card(Icons.Outlined.Lock, "Privacy of new uploads") {
@@ -158,6 +179,13 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
         }
     }
 }
+
+/** Hands picked videos to the same screen as "Share → Footage Vault". */
+private fun importIntent(ctx: android.content.Context, uris: List<android.net.Uri>) =
+    android.content.Intent(ctx, com.footagevault.app.ImportActivity::class.java)
+        .setAction(android.content.Intent.ACTION_SEND_MULTIPLE).setType("video/*")
+        .putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(uris))
+        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
 @Composable
 private fun key(k: Int, content: @Composable () -> Unit) = androidx.compose.runtime.key(k) { content() }

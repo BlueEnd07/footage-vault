@@ -39,7 +39,7 @@
         <activity
             android:name=".ImportActivity"
             android:exported="true"
-            android:label="Back up to YouTube"
+            android:label="Footage Vault"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -79,5 +79,6 @@
 
     <queries>
         <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.apps.photos" />
     </queries>
 </manifest>
