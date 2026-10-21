@@ -45,6 +45,10 @@ data class Item(
     val onPhone: Boolean,
     val privacy: String?,
     val geoChecked: Boolean,
+    /** Date set by hand ("Change date"): automatic date fixing leaves it alone. */
+    val manualDate: Boolean = false,
+    /** false = a hand-set date still has to be written to YouTube. */
+    val dateSynced: Boolean = true,
 ) {
     val isBackedUp get() = status == "backed_up" || status == "youtube"
     val isPending get() = status == "queued" || status == "uploading" || status == "processing"
@@ -53,7 +57,7 @@ data class Item(
         else ytId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 1) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 2) {
 
     private val _version = MutableStateFlow(0L)
     /** Bumps on every write so the UI can reload. */
@@ -83,7 +87,9 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
                 fav_synced INTEGER NOT NULL DEFAULT 1,
                 on_phone INTEGER NOT NULL DEFAULT 1,
                 privacy TEXT,
-                geo_checked INTEGER NOT NULL DEFAULT 0
+                geo_checked INTEGER NOT NULL DEFAULT 0,
+                manual_date INTEGER NOT NULL DEFAULT 0,
+                date_synced INTEGER NOT NULL DEFAULT 1
             )"""
         )
         db.execSQL("CREATE INDEX idx_items_status ON items(status)")
@@ -96,7 +102,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {  // 1.8: hand-set dates
+            db.execSQL("ALTER TABLE items ADD COLUMN manual_date INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE items ADD COLUMN date_synced INTEGER NOT NULL DEFAULT 1")
+        }
+    }
 
     fun bump() { _version.value = _version.value + 1 }
 
@@ -125,6 +136,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
         onPhone = getInt(getColumnIndexOrThrow("on_phone")) == 1,
         privacy = getStringOrNull("privacy"),
         geoChecked = getInt(getColumnIndexOrThrow("geo_checked")) == 1,
+        manualDate = getInt(getColumnIndexOrThrow("manual_date")) == 1,
+        dateSynced = getInt(getColumnIndexOrThrow("date_synced")) == 1,
     )
 
     private fun Cursor.getStringOrNull(c: String) = getColumnIndexOrThrow(c).let { if (isNull(it)) null else getString(it) }

@@ -127,6 +127,38 @@ class YouTube(private val token: suspend () -> String) {
 
     suspend fun removeFromPlaylist(itemId: String) { call("DELETE", "$api/playlistItems?id=${enc(itemId)}") }
 
+    /**
+     * Saves a new recording time on YouTube: the "fv:" details in the description (which both Footage Vault
+     * apps trust first) and YouTube's own recording date. The rest of the snippet is sent back unchanged.
+     */
+    suspend fun setRecorded(id: String, ms: Long, fileName: String) {
+        val v = call("GET", "$api/videos?part=snippet,recordingDetails&id=${enc(id)}").optJSONArray("items")?.optJSONObject(0)
+            ?: throw ApiException(404, "Video not found")
+        val sn = v.getJSONObject("snippet")
+        val desc = sn.optString("description")
+        val fvRegex = Regex("""fv:(\{.*\})""")
+        val fv = fvRegex.find(desc)?.let { runCatching { JSONObject(it.groupValues[1]) }.getOrNull() } ?: JSONObject().put("n", fileName)
+        fv.put("r", ms)
+        val newDesc = if (fvRegex.containsMatchIn(desc)) fvRegex.replace(desc) { "fv:$fv" }
+            else (desc.trimEnd() + "\n\nfv:$fv").trimStart()
+        val rec = java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault())
+        // Vault titles start with the date ("2026-10-17 17:55 · VID_…"): keep that in step.
+        val title = Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?= · )""").replace(sn.optString("title")) {
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(rec)
+        }
+        val snippet = JSONObject().put("title", title).put("description", newDesc)
+            .put("categoryId", sn.optString("categoryId").ifBlank { "22" })
+        sn.optJSONArray("tags")?.let { snippet.put("tags", it) }
+        sn.optString("defaultLanguage").ifBlank { null }?.let { snippet.put("defaultLanguage", it) }
+        // recordingDetails is replaced as a whole: keep the location.
+        val details = v.optJSONObject("recordingDetails") ?: JSONObject()
+        val recording = JSONObject().put("recordingDate", java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(rec))
+        details.optJSONObject("location")?.let { recording.put("location", it) }
+        details.optString("locationDescription").ifBlank { null }?.let { recording.put("locationDescription", it) }
+        call("PUT", "$api/videos?part=snippet,recordingDetails", JSONObject().put("id", id).put("snippet", snippet)
+            .put("recordingDetails", recording))
+    }
+
     /** Permanently deletes a video from the channel. */
     suspend fun deleteVideo(id: String) { call("DELETE", "$api/videos?id=${enc(id)}") }
 

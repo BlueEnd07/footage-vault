@@ -579,6 +579,11 @@ def import_from_youtube() -> dict:
             db.run("""UPDATE videos SET recorded_at=? WHERE youtube_id=? AND status='youtube'
                       AND ABS(strftime('%s', recorded_at) - strftime('%s', ?)) > 60""",
                    (best.strftime("%Y-%m-%d %H:%M:%S"), d["id"], best.strftime("%Y-%m-%d %H:%M:%S")))
+        # A date changed on the phone ("Change date") is saved in the description: apply it to PC copies too.
+        if fv := timeguess.from_fv(d["description"]):
+            db.run("""UPDATE videos SET recorded_at=? WHERE youtube_id=? AND status!='youtube'
+                      AND ABS(strftime('%s', recorded_at) - strftime('%s', ?)) > 60""",
+                   (fv.strftime("%Y-%m-%d %H:%M:%S"), d["id"], fv.strftime("%Y-%m-%d %H:%M:%S")))
     new_ids = {i for i in ids if i not in known and i not in gone}
     for d in details:
         if d["id"] not in new_ids or d["upload_status"] not in ("processed", "uploaded"):

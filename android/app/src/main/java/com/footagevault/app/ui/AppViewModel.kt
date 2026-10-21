@@ -111,6 +111,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (prefs.signedIn) sync.pushFavourites()
     }
 
+    // ---------- change date ----------
+    /**
+     * Moves videos to [date]. With [time] = null each keeps its own time of day (so their order stays);
+     * otherwise they all get that time, a second apart, in their current order.
+     */
+    fun setDate(list: List<Item>, date: java.time.LocalDate, time: java.time.LocalTime?) = io {
+        val zone = java.time.ZoneId.systemDefault()
+        list.sortedBy { it.recorded }.forEachIndexed { i, it ->
+            val t = time?.plusSeconds(i.toLong()) ?: java.time.Instant.ofEpochMilli(it.recorded).atZone(zone).toLocalTime()
+            val ms = date.atTime(t).atZone(zone).toInstant().toEpochMilli()
+            db.update(it.id, "recorded" to ms, "manual_date" to true, "date_synced" to (it.ytId == null))
+        }
+        say(if (list.size == 1) "Date changed" else "Moved ${list.size} videos")
+        if (prefs.signedIn) try { sync.pushDates() } catch (_: Exception) { BackupWorker.runNow(ctx) }  // retried by the next backup run
+    }
+
     // ---------- albums ----------
     fun createAlbum(name: String, items: List<Item> = emptyList()) = io {
         val pid = yt.createPlaylist(name)

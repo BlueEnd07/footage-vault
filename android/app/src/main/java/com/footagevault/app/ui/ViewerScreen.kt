@@ -62,6 +62,7 @@ import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.EditCalendar
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -163,6 +164,7 @@ fun ViewerScreen(
     val density = LocalDensity.current
     val pager = rememberPagerState(initialPage = start.coerceIn(0, (list.size - 1).coerceAtLeast(0))) { list.size }
     var showInfo by rememberSaveable { mutableStateOf(false) }
+    var changingDate by remember { mutableStateOf(false) }
     val current = list.getOrNull(pager.currentPage) ?: return onClose()
     // Live version of the current item (favourite / status changes)
     val all by vm.items.collectAsState()
@@ -299,7 +301,9 @@ fun ViewerScreen(
         }
     }
 
-    if (showInfo) ModalBottomSheet(onDismissRequest = { showInfo = false }) { InfoSheet(live) }
+    if (showInfo) ModalBottomSheet(onDismissRequest = { showInfo = false }) { InfoSheet(live) { showInfo = false; changingDate = true } }
+    if (changingDate) ChangeDateDialog(listOf(live), onDone = { d, t -> vm.setDate(listOf(live), d, t); changingDate = false },
+        onDismiss = { changingDate = false })
 }
 
 private fun lerp(a: Rect, b: Rect, t: Float) = Rect(
@@ -369,12 +373,14 @@ private fun LocalPlayer(item: Item, prefs: com.footagevault.app.data.Prefs) {
 }
 
 @Composable
-private fun InfoSheet(it: Item) {
+private fun InfoSheet(it: Item, onChangeDate: () -> Unit) {
     val t = Instant.ofEpochMilli(it.recorded).atZone(ZoneId.systemDefault())
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp)) {
         Text("Details", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
         InfoRow(Icons.Outlined.CalendarMonth, DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault()).format(t),
-            DateTimeFormatter.ofPattern("h:mm a · O", Locale.getDefault()).format(t))
+            DateTimeFormatter.ofPattern("h:mm a · O", Locale.getDefault()).format(t) + if (it.manualDate) " · set by you" else "") {
+            IconButton(onClick = onChangeDate) { Icon(Icons.Outlined.EditCalendar, "Change date") }
+        }
         val meta = listOfNotNull(if (it.width > 0) "${it.width} × ${it.height}" else null,
             if (it.size > 0) BackupWorker.fmtSize(it.size) else null, fmtDur(it.durationMs)).joinToString(" · ")
         InfoRow(Icons.Outlined.Movie, it.name, meta)
@@ -394,13 +400,14 @@ private fun InfoSheet(it: Item) {
 }
 
 @Composable
-private fun InfoRow(icon: ImageVector, title: String, sub: String?) {
+private fun InfoRow(icon: ImageVector, title: String, sub: String?, action: (@Composable () -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
         Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
         Spacer(Modifier.width(24.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             if (sub != null) Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        action?.invoke()
     }
 }

@@ -50,16 +50,23 @@ def _parse_iso(value):
         return None
 
 
-def for_youtube(title: str, description: str, recording_date: str | None, published: str | None) -> datetime | None:
-    """Footage Vault's own record > time in name/title > YouTube recording time > date-only (midday) > upload date.
-    Returns local time without tzinfo."""
+def from_fv(description: str | None) -> datetime | None:
+    """The time Footage Vault recorded in the description (also where "Change date" on the phone saves it)."""
     if m := _FV.search(description or ""):
         try:
             r = json.loads(m.group(1)).get("r")
             if r:
                 return datetime.fromtimestamp(r / 1000)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OSError):
             pass
+    return None
+
+
+def for_youtube(title: str, description: str, recording_date: str | None, published: str | None) -> datetime | None:
+    """Footage Vault's own record > time in name/title > YouTube recording time > date-only (midday) > upload date.
+    Returns local time without tzinfo."""
+    if t := from_fv(description):
+        return t
     names = []
     if m := _ORIGINAL.search(description or ""):
         names.append(m.group(1))

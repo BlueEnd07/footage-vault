@@ -53,6 +53,11 @@ Phone files use Android's *date taken*. If it's missing, or differs from a full 
 minutes (typical for copied or edited files), the name wins. Times in names are read as the phone's/PC's local time.
 The same rules are in `android/.../data/TimeGuess.kt` and `vault/timeguess.py`.
 
+**Change date** (Android) sets the time by hand: the item is marked `manual_date` (automatic re-dating skips it)
+and, once online, the app rewrites the video's `fv:` `r` and `recordingDate` on YouTube (`videos.update`, 50 units).
+Other phones pick it up on their next pull; the PC app applies a description's `fv:` `r` to its own copy of the
+video too. Videos whose folder or file name contains "gif" are not listed or uploaded by the Android app.
+
 ## Events and duplicates
 
 - **Events:** clips sorted by time are split wherever the gap is over **3 hours** or consecutive located clips are

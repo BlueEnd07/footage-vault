@@ -51,6 +51,9 @@ apps; switch it on, go back and tap Update again. You can also check by hand in 
   tells you.
 - The status pill at the top shows the state: **Backed up**, **N left**, **N waiting** (for Wi-Fi), **Paused**,
   **Daily limit** or **problems**.
+- **GIFs are skipped.** WhatsApp and keyboard "GIFs" are saved as tiny videos (for example in a *WhatsApp Animated
+  Gifs* folder). Anything with "GIF" in its folder or file name is not shown and not uploaded. GIFs uploaded by older
+  versions stay on YouTube until you delete them.
 
 ## Gallery
 
@@ -124,6 +127,17 @@ Each video is dated by when it was really shot, from (in order):
 3. YouTube's recording time
 4. A date-only name such as WhatsApp's `VID-20261017-WA0012`, placed at midday
 5. The upload date, as a last resort
+
+### Change date
+
+Clips that arrive later (say, trip videos sent on WhatsApp on the 19th from a trip on the 17th) can be moved to the
+right day:
+- Long-press to select the videos, tap **Change date** (calendar icon) and pick the day. Or open a video, tap
+  **Info**, then the calendar icon next to its date.
+- **Keep their times** keeps each video's own time of day, so they stay in order. **Set a time…** gives them all one
+  time (a second apart, in their current order).
+- The new date is saved on YouTube (in the video's details and its recording date), so it shows on every phone and
+  in the PC app. Automatic date fixing never changes a date you set; Info shows it as *set by you*.
 
 ## Settings
 

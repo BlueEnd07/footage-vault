@@ -42,6 +42,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             if (System.currentTimeMillis() - prefs.lastPull > 30 * 60_000L || db.items("status='queued'").isNotEmpty() && prefs.lastPull == 0L)
                 sync.pull()
             sync.pushFavourites()
+            sync.pushDates()
             sync.checkProcessing()
             uploadQueued(sync, yt) { current = Auth.silentToken(applicationContext) ?: current }
             sync.checkProcessing()

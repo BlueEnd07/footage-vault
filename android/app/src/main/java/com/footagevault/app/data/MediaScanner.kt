@@ -21,6 +21,7 @@ object MediaScanner {
         ctx.contentResolver.query(collection, arrayOf(MediaStore.Video.Media.BUCKET_DISPLAY_NAME), null, null, null)?.use { c ->
             while (c.moveToNext()) {
                 val b = c.getString(0) ?: continue
+                if (isGif(b)) continue
                 counts[b] = (counts[b] ?: 0) + 1
             }
         }
@@ -32,6 +33,10 @@ object MediaScanner {
         query(ctx) { row -> if (row.bucket in folders && row.recorded >= from) n++ }
         return n
     }
+
+    /** WhatsApp / keyboard "GIFs" are saved as tiny videos (e.g. "WhatsApp Animated Gifs"): not footage, so skipped. */
+    private val GIF = Regex("""(?i)(^|[^a-z])gifs?([^a-z]|$)""")
+    fun isGif(text: String?) = text != null && GIF.containsMatchIn(text)
 
     private data class Row(val id: Long, val name: String, val size: Long, val durationMs: Long, val width: Int,
                            val height: Int, val recorded: Long, val bucket: String?)
@@ -51,6 +56,7 @@ object MediaScanner {
                 var w = c.getInt(4); var h = c.getInt(5)
                 if (c.getInt(6) % 180 == 90) { val t = w; w = h; h = t }
                 val name = c.getString(1) ?: "video.mp4"
+                if (isGif(name) || isGif(c.getString(9))) continue
                 // Date taken, unless it's missing or clearly the copy/save time and the name says otherwise.
                 val recorded = TimeGuess.forPhone(name, c.getLong(7), c.getLong(8) * 1000)
                 each(Row(c.getLong(0), name, size, c.getLong(3), w, h, recorded, c.getString(9)))
@@ -74,7 +80,7 @@ object MediaScanner {
             if (existing != null) {
                 // Earlier versions dated some copied files by when they were saved: fix in place.
                 val row = db.item(existing)
-                if (row != null && kotlin.math.abs(row.recorded - r.recorded) > 60_000) db.update(existing, "recorded" to r.recorded)
+                if (row != null && !row.manualDate && kotlin.math.abs(row.recorded - r.recorded) > 60_000) db.update(existing, "recorded" to r.recorded)
                 return@query
             }
             val backup = r.bucket in prefs.folders && r.recorded >= prefs.backupFrom
@@ -87,7 +93,7 @@ object MediaScanner {
             ))
             if (backup) queued++
         }
-        // Gone from the phone (deleted in the gallery, or by "Free up space")
+        // Gone from the phone (deleted in the gallery, or by "Free up space"), or a GIF (no longer listed)
         for ((mediaId, id) in known) {
             if (mediaId in seen) continue
             val it = db.item(id) ?: continue

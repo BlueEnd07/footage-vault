@@ -77,7 +77,7 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
                 val v = infos.getValue(it.ytId!!)
                 if (v.privacy != null && v.privacy != it.privacy) db.update(it.id, "privacy" to v.privacy)
                 // Re-date videos that only live on YouTube with the best time we can find (name, details).
-                if (!it.onPhone) {
+                if (!it.onPhone && it.dateSynced) {  // a hand-set date waiting to be saved wins
                     val best = TimeGuess.forYouTube(v.title, v.description, v.recorded, v.published)
                     if (best != null && kotlin.math.abs(best - it.recorded) > 60_000) db.update(it.id, "recorded" to best)
                 }
@@ -135,6 +135,18 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
             if (it.favorite && vid !in current) yt.addToPlaylist(fav, vid)
             if (!it.favorite) current[vid]?.let { itemId -> yt.removeFromPlaylist(itemId) }
             db.update(it.id, "fav_synced" to true)
+        }
+    }
+
+    /** Writes hand-set dates ("Change date") to YouTube, so every device shows the same day. */
+    suspend fun pushDates() {
+        for (it in db.items("date_synced=0 AND yt_id IS NOT NULL")) {
+            try {
+                yt.setRecorded(it.ytId!!, it.recorded, it.name)
+            } catch (e: ApiException) {
+                if (!e.isNotFound) throw e  // gone from YouTube: nothing to update
+            }
+            db.update(it.id, "date_synced" to true)
         }
     }
 
