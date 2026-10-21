@@ -182,6 +182,18 @@ def rename_playlist(playlist_id: str, title: str) -> None:
     _call(_service().playlists().update(part="snippet", body=body))
 
 
+def playlist_info(playlist_id: str) -> tuple[str, str] | None:
+    """(title, privacy) of a playlist."""
+    items = _call(_service().playlists().list(part="snippet,status", id=playlist_id)).get("items") or []
+    return (items[0]["snippet"]["title"], items[0]["status"]["privacyStatus"]) if items else None
+
+
+def set_playlist_privacy(playlist_id: str, title: str, privacy: str) -> None:
+    body = {"id": playlist_id, "snippet": {"title": title[:150], "description": "Footage Vault album"},
+            "status": {"privacyStatus": privacy}}
+    _call(_service().playlists().update(part="snippet,status", body=body))
+
+
 def delete_playlist(playlist_id: str) -> None:
     _call(_service().playlists().delete(id=playlist_id))
 
@@ -233,6 +245,9 @@ def video_details(ids: list[str]) -> list[dict]:
                 "upload_status": st.get("uploadStatus"),
                 "duration": _iso_duration(it.get("contentDetails", {}).get("duration", "")),
                 "recorded": (it.get("recordingDetails") or {}).get("recordingDate") or sn.get("publishedAt"),
+                "recording_date": (it.get("recordingDetails") or {}).get("recordingDate"),
+                "published": sn.get("publishedAt"),
+                "description": sn.get("description") or "",
                 "thumb": thumb,
             })
     return out

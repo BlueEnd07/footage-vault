@@ -108,6 +108,19 @@ class YouTube(private val token: suspend () -> String) {
 
     suspend fun deletePlaylist(pid: String) { call("DELETE", "$api/playlists?id=${enc(pid)}") }
 
+    /** (title, privacy) of a playlist. */
+    suspend fun playlistInfo(pid: String): Pair<String, String>? =
+        call("GET", "$api/playlists?part=snippet,status&id=${enc(pid)}").optJSONArray("items")?.optJSONObject(0)?.let {
+            it.getJSONObject("snippet").optString("title") to it.getJSONObject("status").optString("privacyStatus")
+        }
+
+    /** Changes a playlist's privacy (private / unlisted / public). The title must be sent along. */
+    suspend fun setPlaylistPrivacy(pid: String, title: String, privacy: String) {
+        call("PUT", "$api/playlists?part=snippet,status", JSONObject().put("id", pid)
+            .put("snippet", JSONObject().put("title", title).put("description", "Footage Vault album"))
+            .put("status", JSONObject().put("privacyStatus", privacy)))
+    }
+
     suspend fun addToPlaylist(pid: String, videoId: String): String = call("POST", "$api/playlistItems?part=snippet", JSONObject()
         .put("snippet", JSONObject().put("playlistId", pid)
             .put("resourceId", JSONObject().put("kind", "youtube#video").put("videoId", videoId)))).getString("id")

@@ -50,9 +50,10 @@ object MediaScanner {
                 if (size <= 0) continue
                 var w = c.getInt(4); var h = c.getInt(5)
                 if (c.getInt(6) % 180 == 90) { val t = w; w = h; h = t }
-                val taken = c.getLong(7)
-                each(Row(c.getLong(0), c.getString(1) ?: "video.mp4", size, c.getLong(3), w, h,
-                    if (taken > 0) taken else c.getLong(8) * 1000, c.getString(9)))
+                val name = c.getString(1) ?: "video.mp4"
+                // Date taken, unless it's missing or clearly the copy/save time and the name says otherwise.
+                val recorded = TimeGuess.forPhone(name, c.getLong(7), c.getLong(8) * 1000)
+                each(Row(c.getLong(0), name, size, c.getLong(3), w, h, recorded, c.getString(9)))
             }
         }
     }
@@ -69,7 +70,13 @@ object MediaScanner {
         var queued = 0
         query(ctx) { r ->
             seen += r.id
-            if (r.id in known) return@query
+            val existing = known[r.id]
+            if (existing != null) {
+                // Earlier versions dated some copied files by when they were saved: fix in place.
+                val row = db.item(existing)
+                if (row != null && kotlin.math.abs(row.recorded - r.recorded) > 60_000) db.update(existing, "recorded" to r.recorded)
+                return@query
+            }
             val backup = r.bucket in prefs.folders && r.recorded >= prefs.backupFrom
             db.insert(cv(
                 "media_id" to r.id,

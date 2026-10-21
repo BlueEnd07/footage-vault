@@ -415,6 +415,32 @@ def create_album(req: AlbumReq):
     return {"id": db.run("INSERT INTO albums (name, created_at) VALUES (?, ?)", (_album_name(req.name), db.now()))}
 
 
+class ShareReq(BaseModel):
+    make_unlisted: bool = False
+
+
+@app.post("/api/albums/{aid}/share")
+def share_album(aid: int, req: ShareReq):
+    """Link to the album's YouTube playlist. A private playlist must become unlisted to be shared."""
+    a = db.row("SELECT playlist_id FROM albums WHERE id=? AND deleted=0", (aid,))
+    if not a or not a["playlist_id"]:
+        raise HTTPException(409, "This album isn't on YouTube yet. Try again in a minute.")
+    try:
+        info = youtube.playlist_info(a["playlist_id"])
+        if not info:
+            raise HTTPException(404, "Playlist not found on YouTube")
+        title, privacy = info
+        if privacy == "private" and req.make_unlisted:
+            youtube.set_playlist_privacy(a["playlist_id"], title, "unlisted")
+            privacy = "unlisted"
+    except youtube.QuotaExceeded:
+        raise HTTPException(503, "YouTube's daily limit is reached. Try again tomorrow.")
+    private_videos = db.row("""SELECT COUNT(*) n FROM album_videos av JOIN videos v ON v.id = av.video_id
+                               WHERE av.album_id=? AND av.removed=0 AND COALESCE(v.privacy, 'private')='private'""", (aid,))["n"]
+    return {"title": title, "privacy": privacy, "private_videos": private_videos,
+            "url": f"https://www.youtube.com/playlist?list={a['playlist_id']}"}
+
+
 @app.post("/api/albums/{aid}/rename")
 def rename_album(aid: int, req: AlbumReq):
     db.run("UPDATE albums SET name=?, title_synced=0 WHERE id=? AND deleted=0", (_album_name(req.name), aid))

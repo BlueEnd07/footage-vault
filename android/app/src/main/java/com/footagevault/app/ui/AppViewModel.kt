@@ -140,6 +140,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- share an album as a YouTube playlist link ----------
+    /** What sharing would involve: null = ready (already unlisted/public). */
+    data class ShareCheck(val pid: String, val name: String, val playlistPrivate: Boolean, val privateVideos: Int)
+    private val _shareCheck = MutableStateFlow<ShareCheck?>(null)
+    val shareCheck = _shareCheck.asStateFlow()
+    fun dismissShare() { _shareCheck.value = null }
+
+    fun shareAlbum(pid: String) = io {
+        val (title, privacy) = yt.playlistInfo(pid) ?: return@io say("Album not found on YouTube")
+        val ids = db.albums().firstOrNull { it.playlistId == pid }?.ytIds.orEmpty().toSet()
+        val privateVideos = items.value.count { it.ytId in ids && it.privacy == "private" }
+        if (privacy == "private" || privateVideos > 0) _shareCheck.value = ShareCheck(pid, title, privacy == "private", privateVideos)
+        else sendAlbumLink(pid, title)
+    }
+
+    /** After the user agreed: make the playlist unlisted if needed, then open the share sheet. */
+    fun confirmShareAlbum() = io {
+        val c = _shareCheck.value ?: return@io
+        _shareCheck.value = null
+        if (c.playlistPrivate) yt.setPlaylistPrivacy(c.pid, c.name, "unlisted")
+        sendAlbumLink(c.pid, c.name)
+    }
+
+    private fun sendAlbumLink(pid: String, title: String) {
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+            .putExtra(android.content.Intent.EXTRA_TEXT, "$title\nhttps://www.youtube.com/playlist?list=$pid")
+        ctx.startActivity(android.content.Intent.createChooser(send, "Share album").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     fun renameAlbum(pid: String, name: String) = io { yt.renamePlaylist(pid, name); db.addAlbum(pid, name) }
     fun deleteAlbum(pid: String) = io { yt.deletePlaylist(pid); db.removeAlbum(pid); say("Album deleted") }
 

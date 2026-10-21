@@ -228,7 +228,8 @@ function renderSubHeader() {
     if (!a) return setView("albums");
     title = a.name;
     subtitle += " · private YouTube playlist";
-    actions = `<button class="btn outline" id="renameAlbum">${icon("edit")}Rename</button>
+    actions = `<button class="btn filled" id="shareAlbum">${icon("share")}Share</button>
+               <button class="btn outline" id="renameAlbum">${icon("edit")}Rename</button>
                <button class="btn text" id="deleteAlbum">Delete album</button>`;
   } else if (eventId) {
     const e = currentEvent();
@@ -251,7 +252,7 @@ function renderSubHeader() {
   $("#albumSub").textContent = subtitle;
   $("#subActions").innerHTML = actions;
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
-  on("renameAlbum", renameAlbum); on("deleteAlbum", deleteAlbum); on("saveEvent", saveEvent);
+  on("renameAlbum", renameAlbum); on("deleteAlbum", deleteAlbum); on("saveEvent", saveEvent); on("shareAlbum", shareAlbum);
   on("namePerson", namePerson); on("mergePerson", mergePerson); on("hidePerson", hidePerson);
   on("freeBtn2", openFreeSheet);
 }
@@ -298,6 +299,18 @@ async function newAlbum() {
   await refresh();
   setView("photos", id);
   toast("Album created. Select videos and tap Add to album.");
+}
+async function shareAlbum() {
+  let r;
+  try { r = await api(`/api/albums/${albumId}/share`, {}); } catch (e) { return tell("Can't share yet", esc(e.message)); }
+  const warnVideos = r.private_videos ? `<br><br>${plural(r.private_videos, "video")} in it ${r.private_videos === 1 ? "is" : "are"} private and won't play for others. Make them unlisted in YouTube Studio if you want them seen.` : "";
+  if (r.privacy === "private") {
+    if (!await confirmBox(`Share “${esc(r.title)}”?`, "This album is a private playlist. To share it, it becomes <b>unlisted</b>: anyone with the link can see it, but it isn't searchable on YouTube." + warnVideos, "Make unlisted & share")) return;
+    try { r = await api(`/api/albums/${albumId}/share`, { make_unlisted: true }); } catch (e) { return tell("Couldn't share", esc(e.message)); }
+  } else if (warnVideos && !await confirmBox("Share album", warnVideos.slice(8), "Share")) return;
+  if (navigator.share) { try { await navigator.share({ title: r.title, url: r.url }); return; } catch { /* cancelled or unsupported: copy instead */ } }
+  try { await navigator.clipboard.writeText(r.url); toast("Playlist link copied"); }
+  catch { tell("Album link", `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`); }
 }
 async function renameAlbum() {
   const a = albums.find((x) => x.id === albumId);

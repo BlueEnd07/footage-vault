@@ -19,8 +19,9 @@ from .config import DATA
 
 log = logging.getLogger("vault")
 VAPID_PATH = DATA / "vapid_private.pem"
-# Push services require a contact URL or mailto: in the VAPID claim.
-VAPID_CLAIMS = {"sub": "https://github.com/BlueEnd07/footage-vault"}
+# Push services require a contact in the VAPID claim: a mailto: or a bare https origin
+# (py_vapid rejects a URL with a path, which silently broke every notification).
+VAPID_CLAIMS = {"sub": "https://github.com"}
 
 _lock = threading.Lock()
 _events: Counter = Counter()

@@ -4,6 +4,7 @@ import android.content.Context
 import com.footagevault.app.data.Db
 import com.footagevault.app.data.Item
 import com.footagevault.app.data.Prefs
+import com.footagevault.app.data.TimeGuess
 import com.footagevault.app.net.ApiException
 import com.footagevault.app.net.VideoInfo
 import com.footagevault.app.net.YouTube
@@ -65,7 +66,7 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
             if (v.id in known || v.uploadStatus !in setOf("processed", "uploaded")) continue
             db.insert(Db.cv(
                 "name" to (v.title.ifBlank { v.id }), "duration_ms" to (v.durationS * 1000).toLong(),
-                "recorded" to (parseTime(v.recorded) ?: parseTime(v.published) ?: System.currentTimeMillis()),
+                "recorded" to (TimeGuess.forYouTube(v.title, v.description, v.recorded, v.published) ?: System.currentTimeMillis()),
                 "status" to "youtube", "yt_id" to v.id, "on_phone" to false, "privacy" to v.privacy, "geo_checked" to true,
             ))
         }
@@ -73,8 +74,13 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
         for (it in db.items("yt_id IS NOT NULL")) {
             if (it.ytId in infos) {
                 // Picks up privacy changed in YouTube Studio (e.g. private -> unlisted, which plays in the app).
-                val p = infos[it.ytId]?.privacy
-                if (p != null && p != it.privacy) db.update(it.id, "privacy" to p)
+                val v = infos.getValue(it.ytId!!)
+                if (v.privacy != null && v.privacy != it.privacy) db.update(it.id, "privacy" to v.privacy)
+                // Re-date videos that only live on YouTube with the best time we can find (name, details).
+                if (!it.onPhone) {
+                    val best = TimeGuess.forYouTube(v.title, v.description, v.recorded, v.published)
+                    if (best != null && kotlin.math.abs(best - it.recorded) > 60_000) db.update(it.id, "recorded" to best)
+                }
                 continue
             }
             if (it.status == "processing" || it.status == "uploading") continue

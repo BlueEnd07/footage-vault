@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from send2trash import send2trash
 
-from . import db, faces, media, notify, youtube
+from . import db, faces, media, notify, timeguess, youtube
 from .config import DATA, INCOMING, PREVIEWS, THUMBS, load_settings
 
 log = logging.getLogger("vault")
@@ -51,7 +51,8 @@ def register(path: Path, source: str, fallback_time: datetime | None = None,
             db.row("SELECT 1 FROM tombstones WHERE fingerprint=?", (fp,)):
         return None
     meta = media.probe(path)
-    recorded = meta["recorded"] or fallback_time or datetime.fromtimestamp(path.stat().st_mtime)
+    guess = timeguess.from_name(name or path.name)
+    recorded = meta["recorded"] or (guess[0] if guess else None) or fallback_time or datetime.fromtimestamp(path.stat().st_mtime)
     place = media.place_name(meta["lat"], meta["lon"]) if meta["lat"] is not None else None
     try:
         return db.run(
@@ -570,16 +571,26 @@ def import_from_youtube() -> dict:
     on_channel = set(ids)
     known = {r["youtube_id"] for r in db.rows("SELECT youtube_id FROM videos WHERE youtube_id IS NOT NULL")}
     gone = {r["fingerprint"][3:] for r in db.rows("SELECT fingerprint FROM tombstones WHERE fingerprint LIKE 'yt:%'")}
-    new = [i for i in ids if i not in known and i not in gone]
-    for d in youtube.video_details(new):
-        if d["upload_status"] not in ("processed", "uploaded"):
+    details = youtube.video_details(ids)  # all of them (about 1 quota unit per 50), to re-date as well
+    # Re-date videos that only live on YouTube with the best time from their name / details.
+    for d in details:
+        best = timeguess.for_youtube(d["title"], d["description"], d["recording_date"], d["published"])
+        if best:
+            db.run("""UPDATE videos SET recorded_at=? WHERE youtube_id=? AND status='youtube'
+                      AND ABS(strftime('%s', recorded_at) - strftime('%s', ?)) > 60""",
+                   (best.strftime("%Y-%m-%d %H:%M:%S"), d["id"], best.strftime("%Y-%m-%d %H:%M:%S")))
+    new_ids = {i for i in ids if i not in known and i not in gone}
+    for d in details:
+        if d["id"] not in new_ids or d["upload_status"] not in ("processed", "uploaded"):
             continue
+        best = timeguess.for_youtube(d["title"], d["description"], d["recording_date"], d["published"])
         try:
             vid = db.run(
                 """INSERT INTO videos (fingerprint, name, source, path, size, duration, recorded_at, imported_at,
                                        status, youtube_id, privacy, geo_checked, faces_checked)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1)""",
-                ("yt:" + d["id"], d["title"], "youtube", "", 0, d["duration"], _yt_time(d["recorded"]),
+                ("yt:" + d["id"], d["title"], "youtube", "", 0, d["duration"],
+                 best.strftime("%Y-%m-%d %H:%M:%S") if best else _yt_time(d["recorded"]),
                  db.now(), "youtube", d["id"], d["privacy"]))
         except sqlite3.IntegrityError:
             continue

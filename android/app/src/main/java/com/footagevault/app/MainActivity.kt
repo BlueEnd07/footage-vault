@@ -290,6 +290,9 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                     }
                                     when (p) {
                                         is Page.Album -> Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(onClick = { vm.shareAlbum(p.pid) }) {
+                                                Icon(Icons.Outlined.Share, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Share")
+                                            }
                                             FilledTonalButton(onClick = { dialog = "rename" }) { Text("Rename") }
                                             TextButton(onClick = { dialog = "deleteAlbum" }) { Text("Delete album") }
                                         }
@@ -320,6 +323,16 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
             onPick = { pid -> vm.addToAlbum(pid, list); picker = null; selected.clear() },
             onNew = { name -> vm.createAlbum(name, list); picker = null; selected.clear() },
             onDismiss = { picker = null })
+    }
+    // Sharing an album: a private playlist must become unlisted for others to open the link.
+    val share by vm.shareCheck.collectAsState()
+    share?.let { c ->
+        val lines = buildList {
+            if (c.playlistPrivate) add("This album is a private playlist. To share it, it becomes unlisted: anyone with the link can see it, but it isn't searchable on YouTube.")
+            if (c.privateVideos > 0) add("${c.privateVideos} video${if (c.privateVideos == 1) " in it is" else "s in it are"} private and won't play for others. Make them unlisted in YouTube Studio if you want them seen.")
+        }
+        ConfirmDialog(if (c.playlistPrivate) "Share \"${c.name}\"?" else "Share album", lines.joinToString("\n\n"),
+            if (c.playlistPrivate) "Make unlisted & share" else "Share", onConfirm = vm::confirmShareAlbum, onDismiss = vm::dismissShare)
     }
     when (dialog) {
         "newAlbum" -> NameDialog("New album", confirm = "Create", onDone = { vm.createAlbum(it); dialog = null }) { dialog = null }
