@@ -199,18 +199,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val safe = try { sync.verifySafe(list) } finally { _busy.value = false }
         if (safe.isEmpty()) return@io say("Couldn't confirm these on YouTube yet. Try again later.")
         if (safe.size < list.size) say("${list.size - safe.size} kept: YouTube's copy didn't check out")
-        pendingDelete = safe
-        _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, safe.map { Uri.parse(it.uri) })))
+        requestPhoneDelete(safe)
+    }
+
+    /**
+     * Gallery videos go through Android's delete prompt. Copies shared in from Google Photos are the app's own
+     * files, so they go right away.
+     */
+    private fun requestPhoneDelete(list: List<Item>) {
+        val (copies, gallery) = list.partition { it.isImport }
+        for (it in copies) { com.footagevault.app.data.Importer.deleteCopy(it); forgetPhoneCopy(it) }
+        if (gallery.isEmpty()) { if (copies.isNotEmpty()) say("Deleted from the phone"); return }
+        pendingDelete = gallery
+        _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, gallery.map { Uri.parse(it.uri) })))
+    }
+
+    private fun forgetPhoneCopy(it: Item) {
+        if (it.ytId != null) db.update(it.id, "on_phone" to false, "media_id" to null, "uri" to null)
+        else db.delete(it.id)  // a phone-only video: nothing left of it
     }
 
     /** After the system delete prompt. */
     fun onDeleteResult(ok: Boolean) = io {
         if (!ok) { pendingDelete = emptyList(); return@io }
         val bytes = pendingDelete.sumOf { it.size }
-        for (it in pendingDelete) {
-            if (it.ytId != null) db.update(it.id, "on_phone" to false, "media_id" to null, "uri" to null)
-            else db.delete(it.id)  // a phone-only duplicate: nothing left of it
-        }
+        for (it in pendingDelete) forgetPhoneCopy(it)
         say(if (pendingDelete.all { it.ytId != null }) "Freed ${BackupWorker.fmtSize(bytes)}. They're still on YouTube." else "Deleted from the phone")
         pendingDelete = emptyList()
     }
@@ -222,8 +235,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (busy.isNotEmpty()) say("${busy.size} still processing on YouTube; kept on the phone for now")
         val onPhone = list.filter { it.onPhone && it.uri != null && it !in busy }
         if (onPhone.isEmpty()) return@io
-        pendingDelete = onPhone
-        _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, onPhone.map { Uri.parse(it.uri) })))
+        requestPhoneDelete(onPhone)
     }
 
     /** Permanently deletes the YouTube copy (duplicates). A phone copy stays, marked "don't back up". */
@@ -257,8 +269,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val onPhone = list.filter { it.onPhone && it.uri != null }
         if (onPhone.isNotEmpty()) {
             // Fresh rows: they no longer have a YouTube id, so the phone delete removes them completely.
-            pendingDelete = onPhone.mapNotNull { db.item(it.id) }
-            _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, onPhone.map { Uri.parse(it.uri) })))
+            requestPhoneDelete(onPhone.mapNotNull { db.item(it.id) })
         }
         if (gone > 0) say("Deleted $gone from YouTube" + if (onPhone.isNotEmpty()) "; confirm to delete from the phone too" else "")
     }

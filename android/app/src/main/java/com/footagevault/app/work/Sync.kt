@@ -150,6 +150,28 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
         }
     }
 
+    /** Videos shared in with an album name: into that album (made if needed) once they're on YouTube. */
+    suspend fun pushPendingAlbums() {
+        val pending = db.items("pending_album IS NOT NULL AND yt_id IS NOT NULL")
+        for ((name, list) in pending.groupBy { it.pendingAlbum!! }) {
+            val pid = db.albums().firstOrNull { it.name.equals(name, ignoreCase = true) }?.playlistId
+                ?: yt.createPlaylist(name).also { db.addAlbum(it, name) }
+            val have = db.albums().firstOrNull { it.playlistId == pid }?.ytIds.orEmpty().toSet()
+            for (it in list) {
+                if (it.ytId !in have) db.addToAlbum(pid, it.ytId!!, yt.addToPlaylist(pid, it.ytId))
+                db.update(it.id, "pending_album" to null)
+            }
+        }
+    }
+
+    /** Copies shared in from Google Photos are deleted once YouTube has finished with them. */
+    fun cleanImports() {
+        for (it in db.items("uri LIKE 'file:%' AND status='backed_up'")) {
+            com.footagevault.app.data.Importer.deleteCopy(it)
+            db.update(it.id, "on_phone" to false, "uri" to null)
+        }
+    }
+
     /** Uploaded videos YouTube has finished processing become "backed up". */
     suspend fun checkProcessing() {
         val waiting = db.items("status='processing' AND yt_id IS NOT NULL")

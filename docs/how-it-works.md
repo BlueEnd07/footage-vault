@@ -58,6 +58,15 @@ and, once online, the app rewrites the video's `fv:` `r` and `recordingDate` on 
 Other phones pick it up on their next pull; the PC app applies a description's `fv:` `r` to its own copy of the
 video too. Videos whose folder or file name contains "gif" are not listed or uploaded by the Android app.
 
+## Google Photos imports (Android)
+
+`ImportActivity` takes `SEND` / `SEND_MULTIPLE` shares. Share URIs only work while that screen is open, so each video
+is copied to `files/imports/` and added as a queued item (`uri` = `file:…`, bucket *Google Photos*), with its
+recording time from the MP4 creation date (and the file name, per the date rules), size, length and GPS read from
+the file. A duplicate check (name + size or length) runs before and after copying, and `lastPull` is reset so the
+next run matches against the channel first. An album name is kept in `pending_album` and applied once the video has
+a YouTube id; the copy is deleted when the item becomes `backed_up`.
+
 ## Events and duplicates
 
 - **Events:** clips sorted by time are split wherever the gap is over **3 hours** or consecutive located clips are

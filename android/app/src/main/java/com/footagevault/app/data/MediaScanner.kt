@@ -115,7 +115,7 @@ object MediaScanner {
         for (it in db.items("geo_checked=0 AND on_phone=1 AND uri IS NOT NULL").take(limit)) {
             var lat: Double? = null; var lon: Double? = null; var place: String? = null
             try {
-                val uri = MediaStore.setRequireOriginal(android.net.Uri.parse(it.uri))
+                val uri = android.net.Uri.parse(it.uri).let { u -> if (it.isImport) u else MediaStore.setRequireOriginal(u) }
                 MediaMetadataRetriever().use { mmr ->
                     mmr.setDataSource(ctx, uri)
                     val loc = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)

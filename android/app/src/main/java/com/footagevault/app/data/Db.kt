@@ -49,7 +49,11 @@ data class Item(
     val manualDate: Boolean = false,
     /** false = a hand-set date still has to be written to YouTube. */
     val dateSynced: Boolean = true,
+    /** Album to put it in once it's on YouTube (videos shared in from Google Photos). */
+    val pendingAlbum: String? = null,
 ) {
+    /** A copy shared in from another app (Google Photos), kept in the app's own storage until it's backed up. */
+    val isImport get() = uri?.startsWith("file:") == true
     val isBackedUp get() = status == "backed_up" || status == "youtube"
     val isPending get() = status == "queued" || status == "uploading" || status == "processing"
     val thumbModel: Any?
@@ -57,7 +61,7 @@ data class Item(
         else ytId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 2) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 3) {
 
     private val _version = MutableStateFlow(0L)
     /** Bumps on every write so the UI can reload. */
@@ -89,7 +93,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
                 privacy TEXT,
                 geo_checked INTEGER NOT NULL DEFAULT 0,
                 manual_date INTEGER NOT NULL DEFAULT 0,
-                date_synced INTEGER NOT NULL DEFAULT 1
+                date_synced INTEGER NOT NULL DEFAULT 1,
+                pending_album TEXT
             )"""
         )
         db.execSQL("CREATE INDEX idx_items_status ON items(status)")
@@ -107,6 +112,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
             db.execSQL("ALTER TABLE items ADD COLUMN manual_date INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE items ADD COLUMN date_synced INTEGER NOT NULL DEFAULT 1")
         }
+        if (oldVersion < 3) db.execSQL("ALTER TABLE items ADD COLUMN pending_album TEXT")  // 1.9: Google Photos imports
     }
 
     fun bump() { _version.value = _version.value + 1 }
@@ -138,6 +144,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
         geoChecked = getInt(getColumnIndexOrThrow("geo_checked")) == 1,
         manualDate = getInt(getColumnIndexOrThrow("manual_date")) == 1,
         dateSynced = getInt(getColumnIndexOrThrow("date_synced")) == 1,
+        pendingAlbum = getStringOrNull("pending_album"),
     )
 
     private fun Cursor.getStringOrNull(c: String) = getColumnIndexOrThrow(c).let { if (isNull(it)) null else getString(it) }

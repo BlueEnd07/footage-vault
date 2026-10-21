@@ -35,6 +35,27 @@
             </intent-filter>
         </activity>
 
+        <!-- Videos shared in from Google Photos (or any app): copied, then backed up to YouTube -->
+        <activity
+            android:name=".ImportActivity"
+            android:exported="true"
+            android:label="Back up to YouTube"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
+                <!-- An album with photos and videos is shared as "*/*": photos are left out -->
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".YouTubePlayerActivity"
             android:exported="false"

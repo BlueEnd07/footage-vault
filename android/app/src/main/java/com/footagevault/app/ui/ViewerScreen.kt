@@ -133,7 +133,11 @@ fun openOnYouTube(ctx: Context, ytId: String) {
 
 /** Shares the phone's file, or the YouTube link once the video only lives on YouTube. */
 fun shareItems(ctx: Context, items: List<Item>): String? {
-    val files = items.filter { it.onPhone && it.uri != null }.map { Uri.parse(it.uri) }
+    val files = items.filter { it.onPhone && it.uri != null }.map { it ->
+        // Google Photos copies are the app's own files: shared through the FileProvider.
+        if (it.isImport) androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", java.io.File(Uri.parse(it.uri).path!!))
+        else Uri.parse(it.uri)
+    }
     val links = items.filter { !(it.onPhone && it.uri != null) && it.ytId != null }
     val intent = when {
         files.size == 1 && links.isEmpty() -> Intent(Intent.ACTION_SEND).setType("video/*").putExtra(Intent.EXTRA_STREAM, files[0])
@@ -394,7 +398,8 @@ private fun InfoSheet(it: Item, onChangeDate: () -> Unit) {
             else -> Icons.Outlined.CloudUpload to "Waiting to back up"
         }
         InfoRow(icon, text, listOfNotNull(it.privacy?.let { p -> "YouTube: $p" }, it.error).joinToString(" · ").ifBlank { null })
-        InfoRow(Icons.Outlined.Smartphone, if (it.onPhone) "On this phone" else "Not on this phone", if (!it.onPhone && it.ytId != null) "Plays from YouTube" else null)
+        if (it.isImport) InfoRow(Icons.Outlined.Smartphone, "Copied from Google Photos", "The app's copy is removed once it's on YouTube")
+        else InfoRow(Icons.Outlined.Smartphone, if (it.onPhone) "On this phone" else "Not on this phone", if (!it.onPhone && it.ytId != null) "Plays from YouTube" else null)
         Spacer(Modifier.height(8.dp))
     }
 }

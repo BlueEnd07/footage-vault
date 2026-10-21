@@ -46,6 +46,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             sync.checkProcessing()
             uploadQueued(sync, yt) { current = Auth.silentToken(applicationContext) ?: current }
             sync.checkProcessing()
+            sync.pushPendingAlbums()
+            sync.cleanImports()
         } catch (e: ApiException) {
             if (e.isQuota) prefs.pausedUntil = nextQuotaReset()
             else if (e.isAuth) Notify.signInNeeded(applicationContext)

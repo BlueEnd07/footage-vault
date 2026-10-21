@@ -11,7 +11,7 @@ you can free up space on your phone with one tap. There are two apps, and you ca
 | Backs up | the phone's camera folders, in the background, on Wi-Fi | phone videos (sent or synced), PC folders |
 | Gallery | timeline grid, pinch to zoom, date scroller, swipe viewer | timeline grid, viewer, people, map |
 | Albums | private/unlisted YouTube playlists, both ways | same |
-| Extras | Free up space (Android's delete prompt), duplicates, themes, in-app updates | face identification (on the PC), Takeout import, notifications, tray app |
+| Extras | Free up space (Android's delete prompt), Google Photos import (share sheet), change date, duplicates, themes, in-app updates | face identification (on the PC), Takeout import, notifications, tray app |
 
 Both apps read and write **the same YouTube library**, so everything shows up in both. Nothing goes to any server
 except YouTube, and only to your own channel.
