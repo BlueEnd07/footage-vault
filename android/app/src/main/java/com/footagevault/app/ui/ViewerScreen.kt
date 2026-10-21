@@ -23,6 +23,10 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material.icons.filled.PlayArrow
@@ -104,6 +108,22 @@ fun ViewerScreen(
     val all by vm.items.collectAsState()
     val live = all.firstOrNull { it.id == current.id } ?: current
 
+    // YouTube player window: swipes there move through this same list; when it closes, follow it here.
+    val scope = rememberCoroutineScope()
+    val ytLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val i = r.data?.getIntExtra(YouTubePlayerActivity.EXTRA_INDEX, -1) ?: -1
+        if (i in list.indices) scope.launch { pager.scrollToPage(i) }
+    }
+    fun playOnYouTubeHere(page: Int) {
+        val fresh = list.map { x -> all.firstOrNull { it.id == x.id } ?: x }
+        val ids = fresh.map { x -> if (!x.onPhone && x.ytId != null && x.privacy != null && x.privacy != "private") x.ytId else "" }
+        val labels = fresh.map { x ->
+            val t = Instant.ofEpochMilli(x.recorded).atZone(ZoneId.systemDefault())
+            listOfNotNull(dayLabel(t.toLocalDate()), DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()).format(t), x.place).joinToString(" · ")
+        }
+        ytLauncher.launch(YouTubePlayerActivity.intent(ctx, ids.toTypedArray(), labels.toTypedArray(), page))
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { list[it].id }) { page ->
             val item = all.firstOrNull { it.id == list[page].id } ?: list[page]
@@ -115,7 +135,7 @@ fun ViewerScreen(
                     AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                     if (!item.onPhone && item.ytId != null) {
                         if (embeddable) {
-                            Surface(onClick = { YouTubePlayerActivity.open(ctx, item.ytId) }, shape = CircleShape, color = Color.Black.copy(.55f), modifier = Modifier.size(76.dp)) {
+                            Surface(onClick = { playOnYouTubeHere(page) }, shape = CircleShape, color = Color.Black.copy(.55f), modifier = Modifier.size(76.dp)) {
                                 Icon(Icons.Filled.PlayArrow, "Play", tint = Color.White, modifier = Modifier.padding(16.dp))
                             }
                         } else Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
