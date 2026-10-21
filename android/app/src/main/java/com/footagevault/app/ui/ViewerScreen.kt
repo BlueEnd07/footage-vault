@@ -86,6 +86,19 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+/** Plays in YouTube's player inside the app: not on the phone, and unlisted / public. */
+fun Item.playsInYouTubePlayer() = !onPhone && ytId != null && privacy != null && privacy != "private"
+
+/** Full-screen YouTube player for [list], starting at [index]; swiping there moves through the same list. */
+fun youTubePlayerIntent(ctx: Context, list: List<Item>, index: Int): Intent {
+    val ids = list.map { if (it.playsInYouTubePlayer()) it.ytId!! else "" }
+    val labels = list.map { x ->
+        val t = Instant.ofEpochMilli(x.recorded).atZone(ZoneId.systemDefault())
+        listOfNotNull(dayLabel(t.toLocalDate()), DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()).format(t), x.place).joinToString(" · ")
+    }
+    return YouTubePlayerActivity.intent(ctx, ids.toTypedArray(), labels.toTypedArray(), index)
+}
+
 fun openOnYouTube(ctx: Context, ytId: String) {
     try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytId")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     catch (_: ActivityNotFoundException) {
@@ -114,15 +127,8 @@ fun ViewerScreen(
         val i = r.data?.getIntExtra(YouTubePlayerActivity.EXTRA_INDEX, -1) ?: -1
         if (i in list.indices) scope.launch { pager.scrollToPage(i) }
     }
-    fun playOnYouTubeHere(page: Int) {
-        val fresh = list.map { x -> all.firstOrNull { it.id == x.id } ?: x }
-        val ids = fresh.map { x -> if (!x.onPhone && x.ytId != null && x.privacy != null && x.privacy != "private") x.ytId else "" }
-        val labels = fresh.map { x ->
-            val t = Instant.ofEpochMilli(x.recorded).atZone(ZoneId.systemDefault())
-            listOfNotNull(dayLabel(t.toLocalDate()), DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()).format(t), x.place).joinToString(" · ")
-        }
-        ytLauncher.launch(YouTubePlayerActivity.intent(ctx, ids.toTypedArray(), labels.toTypedArray(), page))
-    }
+    fun playOnYouTubeHere(page: Int) =
+        ytLauncher.launch(youTubePlayerIntent(ctx, list.map { x -> all.firstOrNull { it.id == x.id } ?: x }, page))
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { list[it].id }) { page ->

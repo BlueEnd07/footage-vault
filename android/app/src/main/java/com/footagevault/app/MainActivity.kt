@@ -90,6 +90,8 @@ import com.footagevault.app.ui.SettingsScreen
 import com.footagevault.app.ui.VaultTheme
 import com.footagevault.app.ui.VideoGrid
 import com.footagevault.app.ui.ViewerScreen
+import com.footagevault.app.ui.playsInYouTubePlayer
+import com.footagevault.app.ui.youTubePlayerIntent
 import com.footagevault.app.work.BackupWorker
 
 class MainActivity : ComponentActivity() {
@@ -145,6 +147,18 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     }
     val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         vm.onDeleteResult(r.resultCode == Activity.RESULT_OK)
+    }
+    // Tapping a YouTube video starts it right away in the player window. If the user swipes onto a
+    // video that plays from the phone, the gallery viewer takes over at that position.
+    var playerList by remember { mutableStateOf<List<Item>>(emptyList()) }
+    val playerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val i = r.data?.getIntExtra(YouTubePlayerActivity.EXTRA_INDEX, -1) ?: -1
+        if (r.data?.getBooleanExtra(YouTubePlayerActivity.EXTRA_HANDOFF, false) == true && i in playerList.indices) viewer = playerList to i
+    }
+    fun open(list: List<Item>, index: Int) {
+        val item = list.getOrNull(index) ?: return
+        if (item.playsInYouTubePlayer()) { playerList = list; playerLauncher.launch(youTubePlayerIntent(ctx, list, index)) }
+        else viewer = list to index
     }
     LaunchedEffect(Unit) {
         vm.intents.collect { si ->
@@ -232,11 +246,11 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                 Page.Library -> LibraryScreen(items, albums, events,
                     onFilter = { page = Page.Filtered(it) }, onAlbum = { page = Page.Album(it) },
                     onEvent = { page = Page.Event(it) }, onNewAlbum = { dialog = "newAlbum" })
-                Page.Map -> MapScreen(items) { it, list -> viewer = list to list.indexOf(it) }
+                Page.Map -> MapScreen(items) { it, list -> open(list, list.indexOf(it)) }
                 else -> PullToRefreshBox(isRefreshing = busy, onRefresh = vm::refresh) {
                     VideoGrid(
                         shown, selected.toSet(), selecting,
-                        onOpen = { viewer = shown to shown.indexOf(it) }, onToggle = ::toggle,
+                        onOpen = { open(shown, shown.indexOf(it)) }, onToggle = ::toggle,
                         onToggleDay = { day -> if (day.all { it.id in selected }) selected.removeAll(day.map { it.id }.toSet()) else day.forEach { if (it.id !in selected) selected.add(it.id) } },
                         header = {
                             item(span = { GridItemSpan(maxLineSpan) }) {

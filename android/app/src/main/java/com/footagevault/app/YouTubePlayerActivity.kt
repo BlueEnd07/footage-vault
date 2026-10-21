@@ -124,7 +124,7 @@ class YouTubePlayerActivity : Activity() {
         if (to !in ids.indices) return
         index = to
         val id = ids[to]
-        if (id.isBlank()) { finishWithIndex(); return }
+        if (id.isBlank()) { finishWithIndex(handoff = true); return }
         web.evaluateJavascript("load(${JSONObject.quote(id)})", null)
         web.animate().cancel()
         web.translationX = if (dir > 0) dp(60).toFloat() else -dp(60).toFloat()
@@ -133,8 +133,9 @@ class YouTubePlayerActivity : Activity() {
         showChrome()
     }
 
-    private fun finishWithIndex() {
-        setResult(RESULT_OK, Intent().putExtra(EXTRA_INDEX, index))
+    /** handoff = the next video plays in the gallery viewer (it's on the phone, or private). */
+    private fun finishWithIndex(handoff: Boolean) {
+        setResult(RESULT_OK, Intent().putExtra(EXTRA_INDEX, index).putExtra(EXTRA_HANDOFF, handoff))
         finish()
     }
 
@@ -142,7 +143,7 @@ class YouTubePlayerActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (customView != null) web.webChromeClient?.onHideCustomView() else finishWithIndex()
+        if (customView != null) web.webChromeClient?.onHideCustomView() else finishWithIndex(handoff = false)
     }
 
     override fun onPause() { super.onPause(); web.onPause() }
@@ -183,6 +184,7 @@ class YouTubePlayerActivity : Activity() {
 
     companion object {
         const val EXTRA_INDEX = "index"
+        const val EXTRA_HANDOFF = "handoff"
         private const val EXTRA_ID = "yt_id"
         private const val EXTRA_IDS = "yt_ids"
         private const val EXTRA_LABELS = "labels"
