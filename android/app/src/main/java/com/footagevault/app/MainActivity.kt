@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.PauseCircle
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Wifi
@@ -81,6 +83,9 @@ import com.footagevault.app.net.Auth
 import com.footagevault.app.ui.AlbumPicker
 import com.footagevault.app.ui.AppViewModel
 import com.footagevault.app.ui.ConfirmDialog
+import com.footagevault.app.ui.DuplicatesScreen
+import com.footagevault.app.ui.isDark
+import com.footagevault.app.ui.shareItems
 import com.footagevault.app.ui.Filter
 import com.footagevault.app.ui.LibraryScreen
 import com.footagevault.app.ui.MapScreen
@@ -99,9 +104,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         val startScreen = intent.getStringExtra("screen")
-        setContent { VaultTheme { Root(vm, startScreen) } }
+        setContent {
+            val theme by vm.theme.collectAsState()
+            val dark = isDark(theme)
+            // Status / navigation bar icons follow the app's theme, not just the phone's.
+            LaunchedEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                    else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
+            VaultTheme(theme) { Surface(color = MaterialTheme.colorScheme.background) { Root(vm, startScreen) } }
+        }
     }
 
     override fun onResume() {
@@ -117,6 +131,7 @@ private sealed interface Page {
     data class Album(val pid: String) : Page
     data class Event(val key: String) : Page
     data class Filtered(val f: Filter) : Page
+    data object Duplicates : Page
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -129,6 +144,8 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     val events by vm.events.collectAsState()
     val signedIn by vm.signedIn.collectAsState()
     val busy by vm.busy.collectAsState()
+    val columns by vm.columns.collectAsState()
+    val duplicates by vm.duplicates.collectAsState()
     val update by vm.update.collectAsState()
     val updateProgress by vm.updateProgress.collectAsState()
     LaunchedEffect(Unit) { vm.checkForUpdate() }
@@ -175,7 +192,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     BackHandler(enabled = selecting || page !is Page.Videos) {
         when {
             selecting -> selected.clear()
-            page is Page.Album || page is Page.Event || page is Page.Filtered -> page = Page.Library
+            page is Page.Album || page is Page.Event || page is Page.Filtered || page is Page.Duplicates -> page = Page.Library
             else -> page = Page.Videos
         }
     }
@@ -199,6 +216,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                 actions = {
                     val allFav = selItems.all { it.favorite }
                     IconButton(onClick = { vm.setFavorite(selected.toList(), !allFav); selected.clear() }) { Icon(Icons.Outlined.FavoriteBorder, "Favourite") }
+                    IconButton(onClick = { shareItems(ctx, selItems)?.let(vm::say); selected.clear() }) { Icon(Icons.Outlined.Share, "Share") }
                     IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
                     if (selItems.any { it.onPhone && it.status == "backed_up" })
                         IconButton(onClick = { vm.freeUpSpace(selItems.filter { it.onPhone && it.status == "backed_up" }); selected.clear() }) {
@@ -209,10 +227,11 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
             else TopAppBar(
                 title = {
                     when (val p = page) {
-                        is Page.Album, is Page.Event, is Page.Filtered -> Text(when (p) {
+                        is Page.Album, is Page.Event, is Page.Filtered, is Page.Duplicates -> Text(when (p) {
                             is Page.Album -> albums.firstOrNull { it.playlistId == p.pid }?.name ?: "Album"
                             is Page.Event -> events.firstOrNull { it.key == p.key }?.name ?: "Event"
                             is Page.Filtered -> p.f.title
+                            is Page.Duplicates -> "Duplicates"
                             else -> ""
                         }, maxLines = 1)
                         else -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -224,7 +243,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                     }
                 },
                 navigationIcon = {
-                    if (page is Page.Album || page is Page.Event || page is Page.Filtered)
+                    if (page is Page.Album || page is Page.Event || page is Page.Filtered || page is Page.Duplicates)
                         IconButton(onClick = { page = Page.Library }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
@@ -245,11 +264,13 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
             when (val p = page) {
                 Page.Library -> LibraryScreen(items, albums, events,
                     onFilter = { page = Page.Filtered(it) }, onAlbum = { page = Page.Album(it) },
-                    onEvent = { page = Page.Event(it) }, onNewAlbum = { dialog = "newAlbum" })
+                    onEvent = { page = Page.Event(it) }, onNewAlbum = { dialog = "newAlbum" },
+                    duplicates = duplicates.size, onDuplicates = { page = Page.Duplicates })
+                Page.Duplicates -> DuplicatesScreen(duplicates, vm) { list, i -> open(list, i) }
                 Page.Map -> MapScreen(items) { it, list -> open(list, list.indexOf(it)) }
                 else -> PullToRefreshBox(isRefreshing = busy, onRefresh = vm::refresh) {
                     VideoGrid(
-                        shown, selected.toSet(), selecting,
+                        shown, selected.toSet(), selecting, columns, vm::setColumns,
                         onOpen = { open(shown, shown.indexOf(it)) }, onToggle = ::toggle,
                         onToggleDay = { day -> if (day.all { it.id in selected }) selected.removeAll(day.map { it.id }.toSet()) else day.forEach { if (it.id !in selected) selected.add(it.id) } },
                         header = {

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -75,6 +76,7 @@ enum class Filter(val title: String, val empty: String) {
 fun LibraryScreen(
     items: List<Item>, albums: List<Db.Album>, events: List<VaultEvent>,
     onFilter: (Filter) -> Unit, onAlbum: (String) -> Unit, onEvent: (String) -> Unit, onNewAlbum: () -> Unit,
+    duplicates: Int = 0, onDuplicates: () -> Unit = {},
 ) {
     val byYt = remember(items) { items.filter { it.ytId != null }.associateBy { it.ytId } }
     LazyVerticalGrid(
@@ -88,6 +90,7 @@ fun LibraryScreen(
             Triple(Filter.PROBLEMS, Icons.Outlined.ErrorOutline, items.count(Filter.PROBLEMS::test)),
         )
         items(utils, key = { it.first.name }) { (f, icon, n) -> UtilityTile(f.title, icon, n) { onFilter(f) } }
+        item(key = "dupes") { UtilityTile("Duplicates", Icons.Outlined.ContentCopy, duplicates, onDuplicates) }
 
         if (events.isNotEmpty()) {
             item(span = { GridItemSpan(2) }) { SectionHead("Events", "Clips less than 3 hours apart") }

@@ -37,6 +37,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val albums = _albums.asStateFlow()
     private val _events = MutableStateFlow<List<VaultEvent>>(emptyList())
     val events = _events.asStateFlow()
+    private val _duplicates = MutableStateFlow<List<List<Item>>>(emptyList())
+    val duplicates = _duplicates.asStateFlow()
     private val _signedIn = MutableStateFlow(prefs.signedIn)
     val signedIn = _signedIn.asStateFlow()
     private val _busy = MutableStateFlow(false)
@@ -64,6 +66,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _items.value = all
         _albums.value = db.albums()
         _events.value = Events.build(all)
+        _duplicates.value = findDuplicates(all)
     }
 
     fun say(msg: String) { _messages.tryEmit(msg) }
@@ -158,10 +161,64 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun onDeleteResult(ok: Boolean) = io {
         if (!ok) { pendingDelete = emptyList(); return@io }
         val bytes = pendingDelete.sumOf { it.size }
-        for (it in pendingDelete) db.update(it.id, "on_phone" to false, "media_id" to null, "uri" to null)
-        say("Freed ${BackupWorker.fmtSize(bytes)}. They're still on YouTube.")
+        for (it in pendingDelete) {
+            if (it.ytId != null) db.update(it.id, "on_phone" to false, "media_id" to null, "uri" to null)
+            else db.delete(it.id)  // a phone-only duplicate: nothing left of it
+        }
+        say(if (pendingDelete.all { it.ytId != null }) "Freed ${BackupWorker.fmtSize(bytes)}. They're still on YouTube." else "Deleted from the phone")
         pendingDelete = emptyList()
     }
+
+    /** Removes these from the phone without the YouTube check (used for duplicate copies). */
+    fun removeFromPhone(list: List<Item>) = io {
+        val onPhone = list.filter { it.onPhone && it.uri != null }
+        if (onPhone.isEmpty()) return@io
+        pendingDelete = onPhone
+        _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, onPhone.map { Uri.parse(it.uri) })))
+    }
+
+    /** Permanently deletes the YouTube copy (duplicates). A phone copy, if any, stays and backs up again. */
+    fun deleteFromYouTube(item: Item) = io {
+        val id = item.ytId ?: return@io
+        yt.deleteVideo(id)
+        if (item.onPhone) db.update(item.id, "yt_id" to null, "status" to "local", "privacy" to null)
+        else db.delete(item.id)
+        say("Deleted from YouTube")
+    }
+
+    // ---------- duplicates ----------
+
+    /**
+     * Copies of the same video: same length (±1 s) and the same file name, recording time (±3 s) or size.
+     * Catches the same clip uploaded twice to YouTube, or saved twice on the phone.
+     */
+    private fun findDuplicates(all: List<Item>): List<List<Item>> {
+        fun stem(n: String) = n.substringBeforeLast('.').lowercase()
+            .replace(Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · """), "")  // vault upload titles
+            .replace(Regex("""\s*\(\d+\)$"""), "").trim()
+        val list = all.filter { it.durationMs > 0 }.sortedBy { it.durationMs }
+        val parent = IntArray(list.size) { it }
+        fun find(i: Int): Int { var x = i; while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x] }; return x }
+        for (i in list.indices) {
+            var j = i + 1
+            while (j < list.size && list[j].durationMs - list[i].durationMs <= 1000) {
+                val a = list[i]; val b = list[j]
+                val same = stem(a.name) == stem(b.name) || kotlin.math.abs(a.recorded - b.recorded) <= 3000 || (a.size > 0 && a.size == b.size)
+                if (same) parent[find(i)] = find(j)
+                j++
+            }
+        }
+        return list.indices.groupBy(::find).values.filter { it.size > 1 }.map { g -> g.map { list[it] }.sortedByDescending { it.recorded } }
+            .sortedByDescending { it.first().recorded }
+    }
+
+    // ---------- look ----------
+    private val _theme = MutableStateFlow(prefs.theme)
+    val theme = _theme.asStateFlow()
+    fun setTheme(mode: String) { prefs.theme = mode; _theme.value = mode }
+    private val _columns = MutableStateFlow(prefs.gridColumns)
+    val columns = _columns.asStateFlow()
+    fun setColumns(n: Int) { prefs.gridColumns = n; _columns.value = n }
 
     fun retry(item: Item) = io { db.update(item.id, "status" to "queued", "attempts" to 0, "error" to null); BackupWorker.runNow(ctx) }
 

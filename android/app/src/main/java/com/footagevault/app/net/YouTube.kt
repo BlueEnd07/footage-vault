@@ -114,6 +114,9 @@ class YouTube(private val token: suspend () -> String) {
 
     suspend fun removeFromPlaylist(itemId: String) { call("DELETE", "$api/playlistItems?id=${enc(itemId)}") }
 
+    /** Permanently deletes a video from the channel. */
+    suspend fun deleteVideo(id: String) { call("DELETE", "$api/videos?id=${enc(id)}") }
+
     // ---------- resumable upload ----------
     /** Starts an upload session; the returned URL can be resumed later, even after a restart. */
     suspend fun startUpload(meta: JSONObject, size: Long): String = withContext(Dispatchers.IO) {

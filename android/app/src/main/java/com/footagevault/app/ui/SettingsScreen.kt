@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -89,6 +90,15 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                         if (signedIn) OutlinedButton(onClick = { vm.signOut(); tick++ }) { Text("Sign out") }
                         else Button(onClick = vm::signIn) { Text("Sign in") }
                     }
+                }
+
+                val theme by vm.theme.collectAsState()
+                Card(Icons.Outlined.DarkMode, "Theme") {
+                    for ((k, title, sub) in listOf(
+                        Triple("system", "Same as phone", "Follows your phone's dark mode"),
+                        Triple("light", "Light", ""), Triple("dark", "Dark", ""),
+                        Triple("black", "Pure black", "True black for OLED screens, saves battery"),
+                    )) Radio(title, sub, theme == k) { vm.setTheme(k) }
                 }
 
                 Card(Icons.Outlined.CloudUpload, "Backup") {
@@ -183,7 +193,7 @@ private fun Radio(title: String, sub: String, selected: Boolean, onClick: () -> 
         RadioButton(selected, onClick)
         Column(Modifier.padding(start = 4.dp)) {
             Text(title)
-            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

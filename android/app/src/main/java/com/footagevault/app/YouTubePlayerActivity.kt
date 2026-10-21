@@ -19,6 +19,7 @@ import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.core.view.WindowCompat
+import com.footagevault.app.data.Prefs
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
@@ -44,6 +45,8 @@ class YouTubePlayerActivity : Activity() {
     private var ids: Array<String> = emptyArray()
     private var labels: Array<String> = emptyArray()
     private var index = 0
+    private lateinit var prefs: Prefs
+    private var playingId = ""  // video currently in the player
     private val ui = Handler(Looper.getMainLooper())
     private val hideChrome = Runnable { listOf(label, prev, next).forEach { it.animate().alpha(0f).setDuration(250).start() } }
 
@@ -60,7 +63,9 @@ class YouTubePlayerActivity : Activity() {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
-        val root = SwipeLayout(this, onSwipe = ::step, onTouch = ::showChrome).apply { setBackgroundColor(Color.BLACK) }
+        prefs = Prefs(this)
+        val root = SwipeLayout(this, onSwipe = ::step, onDown = { finishWithIndex(handoff = false) }, onTouch = ::showChrome)
+            .apply { setBackgroundColor(Color.BLACK) }
         web = WebView(this).apply {
             setBackgroundColor(Color.BLACK)
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -95,7 +100,8 @@ class YouTubePlayerActivity : Activity() {
         setContentView(root)
 
         // YouTube needs to know who embeds it (else "error 153"): give the page an https origin.
-        web.loadDataWithBaseURL("$ORIGIN/", html(ids[index]), "text/html", "utf-8", null)
+        playingId = ids[index]
+        web.loadDataWithBaseURL("$ORIGIN/", html(playingId, resumeSeconds(playingId)), "text/html", "utf-8", null)
         showChrome()
     }
 
@@ -125,7 +131,9 @@ class YouTubePlayerActivity : Activity() {
         index = to
         val id = ids[to]
         if (id.isBlank()) { finishWithIndex(handoff = true); return }
-        web.evaluateJavascript("load(${JSONObject.quote(id)})", null)
+        saveSpot(playingId)
+        playingId = id
+        web.evaluateJavascript("load(${JSONObject.quote(id)}, ${resumeSeconds(id)})", null)
         web.animate().cancel()
         web.translationX = if (dir > 0) dp(60).toFloat() else -dp(60).toFloat()
         web.alpha = 0.3f
@@ -135,8 +143,24 @@ class YouTubePlayerActivity : Activity() {
 
     /** handoff = the next video plays in the gallery viewer (it's on the phone, or private). */
     private fun finishWithIndex(handoff: Boolean) {
+        if (isFinishing) return
         setResult(RESULT_OK, Intent().putExtra(EXTRA_INDEX, index).putExtra(EXTRA_HANDOFF, handoff))
-        finish()
+        saveSpot(playingId) { finish() }
+    }
+
+    private fun resumeSeconds(id: String) = prefs.resumeAt("y$id") / 1000
+
+    /** Remembers where a long video stopped (videos over a minute, unless nearly finished). */
+    private fun saveSpot(id: String, then: () -> Unit = {}) {
+        if (id.isBlank()) return then()
+        web.evaluateJavascript("(player && player.getCurrentTime) ? player.getCurrentTime() + ',' + player.getDuration() : ''") { v ->
+            val parts = v.trim('"').split(',').mapNotNull { it.toDoubleOrNull() }
+            if (parts.size == 2) {
+                val (pos, dur) = parts
+                prefs.setResumeAt("y$id", if (dur > 60 && pos > 5 && pos < dur - 5) (pos * 1000).toLong() else 0)
+            }
+            then()
+        }
     }
 
     override fun onSaveInstanceState(out: Bundle) { super.onSaveInstanceState(out); out.putInt("index", index) }
@@ -151,7 +175,7 @@ class YouTubePlayerActivity : Activity() {
     override fun onDestroy() { ui.removeCallbacksAndMessages(null); web.destroy(); super.onDestroy() }
 
     /** Lets taps reach YouTube's controls but takes clear horizontal swipes for itself. */
-    private class SwipeLayout(ctx: Context, val onSwipe: (Int) -> Unit, val onTouch: () -> Unit) : FrameLayout(ctx) {
+    private class SwipeLayout(ctx: Context, val onSwipe: (Int) -> Unit, val onDown: () -> Unit, val onTouch: () -> Unit) : FrameLayout(ctx) {
         private var x0 = 0f
         private var y0 = 0f
         private var tracking = false
@@ -171,6 +195,11 @@ class YouTubePlayerActivity : Activity() {
                         tracking = false
                         onSwipe(if (dx < 0) 1 else -1)
                         return true  // the rest of this gesture is ours
+                    }
+                    if (dy > minSwipe * 1.5f && dy > 2 * abs(dx)) {  // swipe down: close, like the viewer
+                        tracking = false
+                        onDown()
+                        return true
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> tracking = false
@@ -195,7 +224,7 @@ class YouTubePlayerActivity : Activity() {
                 .putExtra(EXTRA_IDS, ids).putExtra(EXTRA_LABELS, labels).putExtra(EXTRA_INDEX, index)
 
         /** YouTube IFrame API, so the next video loads in the same player (no page reload). */
-        private fun html(id: String) = """
+        private fun html(id: String, start: Long) = """
             <!doctype html><html><head>
             <meta name="viewport" content="width=device-width,initial-scale=1">
             <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -207,10 +236,13 @@ class YouTubePlayerActivity : Activity() {
               var player, pending = null;
               function onYouTubeIframeAPIReady() {
                 player = new YT.Player('p', { width: '100%', height: '100%', videoId: ${JSONObject.quote(id)},
-                  playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, fs: 1, origin: '$ORIGIN' },
+                  playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, fs: 1, start: $start, origin: '$ORIGIN' },
                   events: { onReady: function (e) { e.target.playVideo(); if (pending) { e.target.loadVideoById(pending); pending = null; } } } });
               }
-              function load(id) { if (player && player.loadVideoById) player.loadVideoById(id); else pending = id; }
+              function load(id, start) {
+                var v = { videoId: id, startSeconds: start || 0 };
+                if (player && player.loadVideoById) player.loadVideoById(v); else pending = v;
+              }
             </script></body></html>
         """.trimIndent()
     }
