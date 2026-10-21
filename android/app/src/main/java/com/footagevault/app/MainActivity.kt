@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.EditCalendar
 import androidx.compose.material.icons.outlined.DeleteSweep
@@ -153,7 +154,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     val update by vm.update.collectAsState()
     val updateProgress by vm.updateProgress.collectAsState()
     LaunchedEffect(Unit) { vm.checkForUpdate() }
-    var page by remember { mutableStateOf<Page>(when (startScreen) { "free" -> Page.Filtered(Filter.FREE); "problems" -> Page.Filtered(Filter.PROBLEMS); else -> Page.Videos }) }
+    var page by remember { mutableStateOf<Page>(when (startScreen) { "free" -> Page.Filtered(Filter.FREE); "problems" -> Page.Filtered(Filter.PROBLEMS); "uploading" -> Page.Filtered(Filter.UPLOADING); else -> Page.Videos }) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<Pair<List<Item>, Int>?>(null) }
     val selected = remember { mutableStateListOf<Long>() }
@@ -291,6 +292,10 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                         val free = vm.freeCandidates()
                                         if (free.isNotEmpty()) Notice(Icons.Outlined.DeleteSweep, "Free up ${BackupWorker.fmtSize(free.sumOf { it.size })}",
                                             "${free.size} video${if (free.size == 1) " is" else "s are"} safely backed up to YouTube.", "Free up space") { vm.freeUpSpace() }
+                                    }
+                                    if (p is Page.Filtered && p.f == Filter.UPLOADING && shown.isNotEmpty()) {
+                                        val (title, why) = vm.uploadState(items)
+                                        Notice(Icons.Outlined.CloudUpload, title, why, "Back up now") { vm.backUpNow() }
                                     }
                                     when (p) {
                                         is Page.Album -> Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

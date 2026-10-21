@@ -80,7 +80,8 @@ class ImportActivity : ComponentActivity() {
             VaultTheme(prefs.theme) {
                 Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                     ImportScreen(vm, signedIn = prefs.signedIn, onClose = ::finish, onOpenApp = {
-                        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+                        startActivity(Intent(this, MainActivity::class.java).putExtra("screen", "uploading")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
                         finish()
                     })
                 }
@@ -122,7 +123,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (added > 0) {
                 Prefs(ctx).lastPull = 0L  // check the channel first, so nothing already there goes up twice
-                BackupWorker.runNow(ctx)
+                BackupWorker.runNow(ctx, after = true)
             }
             _state.value = State.Done(added, dup, failed, album?.trim()?.ifBlank { null })
         }
@@ -161,11 +162,12 @@ private fun ImportScreen(vm: ImportViewModel, signedIn: Boolean, onClose: () -> 
                         (s.album?.let { " and go into the album \"$it\"" } ?: "") + "." else "Sign in in the app to start uploading them.")
                     if (s.duplicates > 0) add("${s.duplicates} skipped: already in your library.")
                     if (s.failed > 0) add("${s.failed} couldn't be copied. Share them again.")
+                    if (s.added > 0) add("In your timeline they're on the days they were filmed. See uploads shows them and how the upload is going.")
                     if (s.added > 0) add("The app's copies are deleted once YouTube has them.")
                 }
                 lines.forEach { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onOpenApp) { Text("Open Footage Vault") }
+                    Button(onClick = onOpenApp) { Text(if (s.added > 0) "See uploads" else "Open Footage Vault") }
                     TextButton(onClick = onClose) { Text("Done") }
                 }
             }

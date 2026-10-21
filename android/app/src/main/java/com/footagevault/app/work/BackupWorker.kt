@@ -27,6 +27,15 @@ import java.util.concurrent.TimeUnit
 class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     private val db = Db.get(ctx)
     private val prefs = Prefs(ctx)
+    private var problem: String? = null
+
+    /** A side step (favourites, dates, albums) that fails must not stop the uploads. */
+    private suspend fun step(block: suspend () -> Unit) {
+        try { block() } catch (e: ApiException) {
+            if (e.isQuota || e.isAuth) throw e
+            problem = e.message
+        }
+    }
 
     override suspend fun doWork(): Result {
         MediaScanner.scan(applicationContext)
@@ -41,17 +50,20 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             // Know what's on the channel before uploading, so nothing goes up twice.
             if (System.currentTimeMillis() - prefs.lastPull > 30 * 60_000L || db.items("status='queued'").isNotEmpty() && prefs.lastPull == 0L)
                 sync.pull()
-            sync.pushFavourites()
-            sync.pushDates()
-            sync.checkProcessing()
+            step { sync.pushFavourites() }
+            step { sync.pushDates() }
+            step { sync.checkProcessing() }
             uploadQueued(sync, yt) { current = Auth.silentToken(applicationContext) ?: current }
-            sync.checkProcessing()
-            sync.pushPendingAlbums()
+            step { sync.checkProcessing() }
+            step { sync.pushPendingAlbums() }
             sync.cleanImports()
+            prefs.lastError = problem
         } catch (e: ApiException) {
             if (e.isQuota) prefs.pausedUntil = nextQuotaReset()
             else if (e.isAuth) Notify.signInNeeded(applicationContext)
-        } catch (_: Exception) {
+            prefs.lastError = if (e.isQuota) null else e.message
+        } catch (e: Exception) {
+            prefs.lastError = e.message ?: e.javaClass.simpleName
             return Result.retry()
         }
         announce()
@@ -142,9 +154,10 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 if (replace) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP, req)
         }
 
-        fun runNow(ctx: Context) {
+        /** [after] = also run once more after a run that's already going (new videos were just added). */
+        fun runNow(ctx: Context, after: Boolean = false) {
             val req = OneTimeWorkRequestBuilder<BackupWorker>().setConstraints(constraints(Prefs(ctx))).build()
-            WorkManager.getInstance(ctx).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, req)
+            WorkManager.getInstance(ctx).enqueueUniqueWork(NOW, if (after) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, req)
         }
 
         /** YouTube's daily quota resets at midnight Pacific time. */

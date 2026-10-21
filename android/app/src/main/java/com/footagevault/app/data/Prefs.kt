@@ -52,6 +52,11 @@ class Prefs(ctx: Context) {
         get() = p.getString("fav_playlist", null)
         set(v) = p.edit { putString("fav_playlist", v) }
 
+    /** Why the last backup run stopped (shown on the Uploading page); null = it went fine. */
+    var lastError: String?
+        get() = p.getString("last_error", null)
+        set(v) = p.edit { putString("last_error", v) }
+
     var lastPull: Long
         get() = p.getLong("last_pull", 0L)
         set(v) = p.edit { putLong("last_pull", v) }

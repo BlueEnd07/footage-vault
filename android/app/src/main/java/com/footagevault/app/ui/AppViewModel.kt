@@ -102,6 +102,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         BackupWorker.runNow(ctx)
     }
 
+    /** Why videos haven't uploaded yet, in plain words (Uploading page). */
+    fun uploadState(items: List<Item>): Pair<String, String> {
+        val pending = items.filter { it.isPending }
+        val up = pending.firstOrNull { it.status == "uploading" }
+        val waiting = pending.count { it.status != "processing" }
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        val online = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val unmetered = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+        val charging = ctx.getSystemService(android.os.BatteryManager::class.java).isCharging
+        val err = prefs.lastError
+        val resume = java.time.format.DateTimeFormatter.ofPattern("EEE h:mm a")
+            .format(java.time.Instant.ofEpochMilli(prefs.pausedUntil).atZone(java.time.ZoneId.systemDefault()))
+        return when {
+            !prefs.signedIn -> "Not signed in" to "Sign in to YouTube (Settings) to start uploading."
+            prefs.userPaused -> "Backup is paused" to "Turn off Pause backup in Settings."
+            System.currentTimeMillis() < prefs.pausedUntil -> "YouTube's daily limit is reached" to
+                "YouTube only allows a few uploads a day for your Google project. They continue by themselves after $resume."
+            up != null -> "Uploading ${up.name}" to "${(up.progress * 100).toInt()}% · $waiting left"
+            waiting == 0 -> "YouTube is processing" to "${pending.size} uploaded. YouTube is finishing them, which can take a while for long videos."
+            !online -> "No internet" to "Uploads start when the phone is online."
+            prefs.wifiOnly && !unmetered -> "Waiting for Wi-Fi" to "Only on Wi-Fi is on in Settings, and the phone is on mobile data."
+            prefs.chargingOnly && !charging -> "Waiting for charging" to "Only while charging is on in Settings. Plug the phone in."
+            err != null -> "The last try didn't work" to "$err\nIt tries again by itself. Tap Back up now to retry."
+            else -> "Starting soon" to "$waiting waiting. Android starts the backup within a few minutes."
+        }
+    }
+
     fun rescan() = io { MediaScanner.scan(ctx); BackupWorker.runNow(ctx) }
     fun backUpNow() { BackupWorker.runNow(ctx); say("Backing up…") }
 
