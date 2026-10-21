@@ -1,105 +1,83 @@
 # Footage Vault
 
-**Your own Google Photos for videos, with YouTube as the storage.**
+**Your own Google Photos for videos, with your YouTube channel as the storage.**
 
-Footage Vault runs on your Windows PC. It backs up every video from your phone and PC to **your own YouTube
-channel as private videos**, then lets you browse them in a fast gallery like Google Photos, on the PC or on your
-phone. Once a video is safely on YouTube, the original can be deleted to free up space. The app keeps a small 720p
-copy for watching.
+Footage Vault backs up every video you shoot to **your own YouTube channel**, as private or unlisted
+videos. You browse them in a gallery that looks and feels like Google Photos. Once a video is safely on YouTube,
+you can free up space on your phone with one tap. There are two apps, and you can use either or both:
 
-Nothing goes to a third-party server. The app runs on your PC and talks only to your Google account.
+| | **Android app** (no PC needed) | **PC app** (Windows) |
+|---|---|---|
+| Backs up | the phone's camera folders, in the background, on Wi-Fi | phone videos (sent or synced), PC folders |
+| Gallery | timeline grid, pinch to zoom, date scroller, swipe viewer | timeline grid, viewer, people, map |
+| Albums | private/unlisted YouTube playlists, both ways | same |
+| Extras | Free up space (Android's delete prompt), duplicates, themes, in-app updates | face identification (on the PC), Takeout import, notifications, tray app |
 
-## What it does
+Both apps read and write **the same YouTube library**, so everything shows up in both. Nothing goes to any server
+except YouTube, and only to your own channel.
 
-| | |
+## Features
+
+- **Automatic backup.** Uploads resume after a dropped connection, and the queue waits out YouTube's daily limit
+  by itself. Videos already on your channel are recognised and not uploaded twice.
+- **A gallery like Google Photos.** It has Today / Yesterday / day headers, a month view and a red badge on anything
+  not backed up yet. Tap to play, and swipe between videos.
+- **Correct dates.** Clips are dated by when they were shot, using their file name and saved details, so the same
+  day stays together even for videos uploaded straight to YouTube.
+- **Albums, Events and Favourites.** Albums are YouTube playlists, and you can **share an album** as a playlist link.
+  Events group clips recorded less than 3 hours apart. Favourites are a private playlist.
+- **People** (PC app). Faces are found and grouped **on your PC**, and you name them.
+- **Map.** Clips appear where they were shot, if the camera saved the location.
+- **Free up space.** Each video is re-checked against YouTube before the phone copy is deleted. Nothing is deleted
+  without your confirmation.
+- **Duplicates.** Copies of the same video are shown side by side so you can delete the extras.
+- **Privacy.** Everything stays on your devices and your own YouTube channel. Your Google login stays on your devices.
+
+## Get started
+
+- **Android app:** see **[docs/android.md](docs/android.md)**. In short, download `FootageVault.apk` from
+  [Releases](https://github.com/BlueEnd07/footage-vault/releases), add an Android key in your Google Cloud project,
+  install it and sign in. After that, it updates itself.
+- **PC app (Windows):** see **[SETUP.md](SETUP.md)**. In short:
+  ```powershell
+  git clone https://github.com/BlueEnd07/footage-vault.git
+  cd footage-vault
+  powershell -ExecutionPolicy Bypass -File install.ps1
+  ```
+- **Installing with an AI assistant:** give Claude Code (or another coding agent) the repo link and say "install this".
+  [AGENTS.md](AGENTS.md) tells it exactly what to do and which steps need you.
+
+Both apps need a **free Google Cloud project with the YouTube Data API**, so uploads run under your own account
+and quota. The setup takes about 15 minutes once and is covered step by step.
+
+## Documentation
+
+| Doc | What's in it |
 |---|---|
-| **Backup** | Uploads videos to your YouTube channel as **private**. A queue runs in the background, resumes after network drops, and waits out YouTube's daily limit on its own. |
-| **Gallery** | Timeline grouped by month and day, a Google Photos-style viewer (swipe between videos, favourites, info), filters and multi-select. |
-| **Phone** | Installable phone app (PWA) via Tailscale, push notifications, and automatic Wi-Fi-only backup of the camera folder via Syncthing. |
-| **Free up space** | Re-checks each video against YouTube, then deletes it from your phone (via Syncthing) and the PC (to the Recycle Bin). |
-| **Albums** | Albums are private YouTube playlists, synced both ways. **Events** group clips recorded less than 3 hours apart automatically. |
-| **People** | Face identification **on your PC**: name people, merge, fix mistakes. No faces or images are uploaded. |
-| **Map** | Clips on a map with place names, looked up offline (needs the camera's location setting on). |
-| **Your YouTube** | Videos you upload to YouTube directly, and your playlists, show up in the vault too. |
-| **Delete forever** | Deletes from YouTube permanently, plus local copies, and remembers it so the video never comes back. |
-| **Safety** | Originals are deleted only after YouTube has processed the video and its length matches, plus a grace period (default 3 days). Deletes always go to the Recycle Bin. |
-
-## Install
-
-**Requirements:** Windows 10/11, plus a Google account with a YouTube channel. The installer adds Python 3.11+
-and ffmpeg if they're missing.
-
-```powershell
-git clone https://github.com/BlueEnd07/footage-vault.git
-cd footage-vault
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
-The installer sets up everything, downloads the face models and starts the app in the system tray.
-After that, open **http://localhost:8765**.
-
-**Then connect your own Google account (one time, about 15 minutes).** YouTube uploads need your own free
-Google Cloud key. [SETUP.md](SETUP.md) section 2 walks you through it:
-1. Create a Google Cloud project and enable **YouTube Data API v3**.
-2. Create an OAuth client of type **Desktop app**.
-3. Download it as `client_secret.json` into this folder.
-4. In the app, click **⚙ → Connect YouTube**.
-
-**Installing with an AI assistant:** give Claude Code (or another coding agent) the repo link and say
-"install this". [AGENTS.md](AGENTS.md) tells it exactly what to do, including which steps need you
-(the Google sign-in).
-
-## Android app (no PC needed)
-
-`android/` holds a native Android app (Kotlin, Jetpack Compose). It backs up the camera folder straight to your
-YouTube channel in the background, on Wi-Fi only. It has the same gallery, albums (playlists), favourites, events and
-map, and a one-tap **Free up space** that uses Android's own delete prompt. It reads and writes the same YouTube
-library as the PC app, so both can be used together.
-
-- **Install:** download `FootageVault.apk` from [Releases](https://github.com/BlueEnd07/footage-vault/releases) on the
-  phone and open it. After that, the app updates itself: it shows **Update available** when a new release is out.
-- **Google setup:** in the same Google Cloud project, create an OAuth client of type **Android** with package name
-  `com.footagevault.app` and the SHA-1 of the key the APK is signed with. No client secret is involved.
-- **Build it yourself:** use JDK 17 and the Android SDK (platform 35), then run `cd android && ./gradlew assembleRelease`.
-  If you build with your own signing key, register that key's SHA-1 instead.
-- **Playback:** videos still on the phone play directly. Unlisted or public YouTube videos play in YouTube's player
-  inside the app. Private ones open in the YouTube app, because YouTube doesn't allow embedding private videos.
-
-## Everyday use
-
-- **Start / stop:** the app starts with Windows. Right-click the tray icon to **Pause uploads** or **Quit**.
-  Run `start.bat` to start it by hand.
-- **Phone:** see [SETUP.md](SETUP.md) sections 4–5 for Tailscale (secure address, install as an app,
-  notifications) and Syncthing (automatic Wi-Fi backup).
-- **Your data** stays in `data\` on your PC: the library database, previews, thumbnails, face crops, your login
-  token and PIN. It's excluded from git. Back up `data\vault.db` now and then.
+| [docs/android.md](docs/android.md) | Installing and using the phone app: backup, gallery gestures, albums, free up space, duplicates, updates |
+| [SETUP.md](SETUP.md) | Setting up the PC app: Google key, Tailscale (phone access), Syncthing (Wi-Fi sync) |
+| [docs/pc-guide.md](docs/pc-guide.md) | Using the PC app: gallery, people, map, albums, Takeout, delete forever, settings |
+| [docs/how-it-works.md](docs/how-it-works.md) | How it works: YouTube as storage, dates, duplicate detection, safety checks, limits |
+| [docs/development.md](docs/development.md) | Building, testing and releasing both apps |
+| [AGENTS.md](AGENTS.md) | Install instructions for AI coding agents |
 
 ## Good to know
 
-- YouTube re-compresses uploads. The YouTube copy looks good but isn't byte-identical to your original.
-- Google projects that haven't been reviewed can only upload **private** videos. That's what this app does anyway.
-- While your Google project is in **Testing** mode, Google signs you out every 7 days. Click **Reconnect**
-  when the app asks, or publish the project (SETUP.md).
-- Music in videos can still get copyright claims, even on private uploads.
+- **YouTube re-compresses videos.** The YouTube copy looks good but isn't byte-identical to the original.
+  Keep originals elsewhere if you need them exactly.
+- **Private vs unlisted.** Uploads from your own Google project are **private** until the project passes YouTube's
+  API audit. Private videos only play in the YouTube app/site. Unlisted ones also play inside Footage Vault.
+  You can switch videos to unlisted in YouTube Studio.
+- **Sign-in every 7 days** while the Google project is in *Testing* mode. Publish it to avoid this (see SETUP.md).
+- **Copyright claims:** music in videos can still be claimed by YouTube, even on private uploads.
 
-## How it's built
-
-Python (FastAPI, SQLite) with a plain HTML/JS front end. No build step.
+## Repository layout
 
 ```
-install.ps1          one-command installer (Python, ffmpeg, packages, face models)
-start.bat            starts the app (tray icon); `python run.py --console` for a console instead
-run.py               entry point
-vault/main.py        web server + API
-vault/worker.py      background jobs: previews, upload queue, processing checks, safe delete,
-                     watched folders, album <-> playlist sync, YouTube import
-vault/youtube.py     YouTube Data API v3 (OAuth, resumable upload, playlists)
-vault/media.py       ffprobe/ffmpeg: metadata, GPS, thumbnails, previews
-vault/faces.py       local face detection + grouping (OpenCV YuNet + SFace)
-vault/events.py      automatic events (3-hour gap)
-vault/notify.py      Web Push notifications
-vault/tray.py        tray icon + start with Windows
-web/                 gallery UI, service worker, Leaflet map (bundled)
+android/          Android app (Kotlin, Jetpack Compose)
+vault/            PC app back end (Python, FastAPI, SQLite)
+web/              PC app front end (HTML/CSS/JS, no build step)
+docs/             Documentation
+install.ps1       One-command installer for the PC app
+start.bat         Starts the PC app in the system tray
 ```
-
-Set `VAULT_DATA` to another folder to try things without touching your real library.
