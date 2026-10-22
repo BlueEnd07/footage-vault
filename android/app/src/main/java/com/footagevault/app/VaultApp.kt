@@ -14,7 +14,7 @@ class VaultApp : Application(), ImageLoaderFactory {
         super.onCreate()
         Notify.channels(this)
         Configuration.getInstance().userAgentValue = "FootageVault/1.0 (Android)"
-        BackupWorker.schedule(this)
+        BackupWorker.schedule(this, replace = true)  // also picks up new retry rules after an update
     }
 
     /** Thumbnails: a frame from the phone's own file, or YouTube's thumbnail once it's gone from the phone. */

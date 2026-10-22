@@ -131,6 +131,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             prefs.wifiOnly && !unmetered -> "Waiting for Wi-Fi" to "Only on Wi-Fi is on in Settings, and the phone is on mobile data."
             prefs.chargingOnly && !charging -> "Waiting for charging" to "Only while charging is on in Settings. Plug the phone in."
             err != null -> "The last try didn't work" to "$err\nIt tries again by itself. Tap Back up now to retry."
+            pending.any { it.error != null } -> "The last upload didn't work" to
+                "${pending.first { it.error != null }.error}\nIt tries again by itself. Tap Back up now to retry."
             else -> "Starting soon" to "$waiting waiting. Android starts the backup within a few minutes."
         }
     }

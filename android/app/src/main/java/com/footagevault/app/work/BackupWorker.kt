@@ -3,6 +3,7 @@ package com.footagevault.app.work
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -11,6 +12,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.footagevault.app.data.Db
@@ -23,6 +25,7 @@ import com.footagevault.app.net.YouTube
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.sync.Mutex
 
 /** Scans the gallery, uploads queued videos to YouTube, and keeps the library in sync. */
 class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -40,11 +43,15 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     override suspend fun doWork(): Result {
         if (!ImportService.running) Importer.recover(applicationContext)
-        MediaScanner.scan(applicationContext)
-        MediaScanner.fillLocations(applicationContext)
+        runCatching { MediaScanner.scan(applicationContext) }
+        runCatching { MediaScanner.fillLocations(applicationContext) }
         if (!prefs.signedIn) return Result.success()
         val token = Auth.silentToken(applicationContext)
-        if (token == null) { Notify.signInNeeded(applicationContext); return Result.success() }
+        if (token == null) {
+            prefs.lastError = "Google sign-in has expired. Open Settings, tap Sign out, then Sign in again."
+            Notify.signInNeeded(applicationContext)
+            return Result.success()
+        }
         var current: String = token
         val yt = YouTube { current }
         val sync = Sync(applicationContext, yt)
@@ -75,6 +82,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     private suspend fun uploadQueued(sync: Sync, yt: YouTube, refreshToken: suspend () -> Unit) {
         if (prefs.userPaused || System.currentTimeMillis() < prefs.pausedUntil) return
         if (ImportService.running) return  // copying from Google Photos first; uploads start when it's done
+        // The periodic run and a "now" run can overlap: only one uploads, so no video goes up twice.
+        if (!uploading.tryLock()) return
+        try { uploadLoop(sync, yt, refreshToken) } finally { uploading.unlock() }
+    }
+
+    private suspend fun uploadLoop(sync: Sync, yt: YouTube, refreshToken: suspend () -> Unit) {
         while (!isStopped) {
             val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3", order = "recorded ASC").firstOrNull() ?: return
             val left = db.items("status IN ('queued','uploading') AND on_phone=1").size
@@ -153,6 +166,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     companion object {
         private const val PERIODIC = "backup-periodic"
         private const val NOW = "backup-now"
+        private val uploading = Mutex()
 
         private fun constraints(prefs: Prefs) = Constraints.Builder()
             .setRequiredNetworkType(if (prefs.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
@@ -161,15 +175,30 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
         /** Every 15 minutes (Android's minimum), under the chosen Wi-Fi / charging rules. */
         fun schedule(ctx: Context, replace: Boolean = false) {
-            val req = PeriodicWorkRequestBuilder<BackupWorker>(15, TimeUnit.MINUTES).setConstraints(constraints(Prefs(ctx))).build()
+            val req = PeriodicWorkRequestBuilder<BackupWorker>(15, TimeUnit.MINUTES).setConstraints(constraints(Prefs(ctx)))
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 1, TimeUnit.MINUTES).build()
             WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(PERIODIC,
                 if (replace) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP, req)
         }
 
-        /** [after] = also run once more after a run that's already going (new videos were just added). */
+        /**
+         * Runs a backup now. A run that's waiting (for Wi-Fi, or to retry after an error, which can grow to hours)
+         * is replaced by a fresh one; a run that's going is left alone ([after] = run once more when it ends).
+         */
         fun runNow(ctx: Context, after: Boolean = false) {
-            val req = OneTimeWorkRequestBuilder<BackupWorker>().setConstraints(constraints(Prefs(ctx))).build()
-            WorkManager.getInstance(ctx).enqueueUniqueWork(NOW, if (after) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, req)
+            val wm = WorkManager.getInstance(ctx)
+            val req = OneTimeWorkRequestBuilder<BackupWorker>().setConstraints(constraints(Prefs(ctx)))
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 1, TimeUnit.MINUTES).build()
+            val infos = wm.getWorkInfosForUniqueWork(NOW)
+            infos.addListener({
+                val running = runCatching { infos.get() }.getOrNull().orEmpty().any { it.state == WorkInfo.State.RUNNING }
+                val policy = when {
+                    !running -> ExistingWorkPolicy.REPLACE
+                    after -> ExistingWorkPolicy.APPEND_OR_REPLACE
+                    else -> ExistingWorkPolicy.KEEP
+                }
+                wm.enqueueUniqueWork(NOW, policy, req)
+            }, Runnable::run)
         }
 
         /** YouTube's daily quota resets at midnight Pacific time. */
