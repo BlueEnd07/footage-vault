@@ -65,7 +65,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             else if (e.isAuth) Notify.signInNeeded(applicationContext)
             prefs.lastError = if (e.isQuota) null else e.message
         } catch (e: Exception) {
-            prefs.lastError = e.message ?: e.javaClass.simpleName
+            if (!isStopped) prefs.lastError = e.message ?: e.javaClass.simpleName  // stopped by Android: not a problem
             return Result.retry()
         }
         announce()
@@ -79,7 +79,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3", order = "recorded ASC").firstOrNull() ?: return
             val left = db.items("status IN ('queued','uploading') AND on_phone=1").size
             val title = "Backing up · $left left"
-            setForeground(foreground(title, it.name, 0))
+            val shown = tryForeground(title, it.name)
             db.update(it.id, "status" to "uploading", "error" to null)
             try {
                 refreshToken()
@@ -96,7 +96,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     if (pct != lastPct) {
                         lastPct = pct
                         db.update(it.id, "progress" to sent.toFloat() / it.size)
-                        setForegroundAsync(foreground(title, "${it.name} · $pct%", pct))
+                        if (shown) setForegroundAsync(foreground(title, "${it.name} · $pct%", pct))
                     }
                 }
                 val vid = result.getString("id")
@@ -115,11 +115,20 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 db.update(it.id, "status" to "failed", "error" to "The file is no longer on the phone")
             } catch (e: Exception) {
                 // Network dropped: keep the session, resume next time.
-                db.update(it.id, "status" to "queued", "error" to (e.message ?: "Network problem"))
+                db.update(it.id, "status" to "queued", "error" to if (isStopped) null else (e.message ?: "Network problem"))
                 throw e
             }
         }
     }
+
+    /**
+     * Shows the "Backing up" notification so a long upload may keep going. Android refuses that while the app is in
+     * the background (Android 12+); then the upload runs anyway, as a normal background job. If Android stops the job
+     * after its time is up, the upload resumes where it left off next time.
+     */
+    private suspend fun tryForeground(title: String, text: String): Boolean = try {
+        setForeground(foreground(title, text, 0)); true
+    } catch (_: IllegalStateException) { false }
 
     private fun fail(id: Long, attempts: Int, msg: String?) {
         val n = attempts + 1
