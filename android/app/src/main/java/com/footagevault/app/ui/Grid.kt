@@ -1,5 +1,7 @@
 package com.footagevault.app.ui
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.Column
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -134,11 +136,16 @@ fun VideoGrid(
         if (months) items.groupBy { YearMonth.from(localDate(it.recorded)) }.toList()
         else items.groupBy { localDate(it.recorded) }.toList()
     }
+    // Big tiles now and then (like Google Photos), only at the roomy sizes.
+    val laid: List<Pair<Any, List<Seg>>> = remember(groups, columns) { groups.map { (k, list) -> k to mosaic(list, columns) } }
     // Recorded time per grid position (headers included), for the date scroller's label.
-    val positions: List<Long?> = remember(groups, header != null) {
+    val positions: List<Long?> = remember(laid, header != null) {
         buildList {
             if (header != null) add(null)
-            for ((_, list) in groups) { add(list.first().recorded); list.forEach { add(it.recorded) } }
+            for ((_, segs) in laid) {
+                add(segs.first().let { (it as? Seg.Plain)?.items?.first() ?: (it as Seg.Block).big }.recorded)
+                for (seg in segs) when (seg) { is Seg.Plain -> seg.items.forEach { add(it.recorded) }; is Seg.Block -> add(seg.big.recorded) }
+            }
         }
     }
     val state = rememberLazyGridState()
@@ -178,7 +185,8 @@ fun VideoGrid(
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             header?.invoke(this)
-            for ((key, list) in groups) {
+            for ((key, segs) in laid) {
+                val list = segs.flatMap { seg -> when (seg) { is Seg.Plain -> seg.items; is Seg.Block -> listOf(seg.big) + seg.small } }
                 item(key = "h$key", span = { GridItemSpan(maxLineSpan) }) {
                     val all = selecting && list.all { it.id in selected }
                     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = if (months) 20.dp else 18.dp, bottom = 8.dp),
@@ -196,11 +204,103 @@ fun VideoGrid(
                         }
                     }
                 }
-                items(list, key = { it.id }) { item -> Tile(item, item.id in selected, selecting, compact = months, onOpen, onToggle) }
+                for (seg in segs) when (seg) {
+                    is Seg.Plain -> items(seg.items, key = { it.id }) { item -> Tile(item, item.id in selected, selecting, compact = months, onOpen, onToggle) }
+                    is Seg.Block -> item(key = "b${seg.big.id}", span = { GridItemSpan(maxLineSpan) }) {
+                        MosaicBlock(seg, columns, gap = 2.dp, selected, selecting, onOpen, onToggle)
+                    }
+                }
             }
         }
         if (items.size > 30) DateScroller(state, positions)
     }
+}
+
+/** A day's tiles: plain rows, or a block with one big (2×2) tile beside small ones. */
+sealed interface Seg {
+    data class Plain(val items: List<Item>) : Seg
+    data class Block(val big: Item, val small: List<Item>, val bigLeft: Boolean) : Seg
+}
+
+/**
+ * Lays out one day. At 3 or 4 columns, a day with 6+ items gets a big tile at the start and then every few rows,
+ * alternating sides. Videos and favourites are picked to be big first (a big video plays by itself).
+ */
+private fun mosaic(list: List<Item>, columns: Int): List<Seg> {
+    if (columns !in 3..4 || list.size < 6) return listOf(Seg.Plain(list))
+    val block = 1 + 2 * (columns - 2)
+    val out = mutableListOf<Seg>()
+    var plain = mutableListOf<Item>()
+    var i = 0; var row = 0; var left = true
+    while (i < list.size) {
+        if (list.size - i >= block && row % 4 == 0) {
+            if (plain.isNotEmpty()) { out += Seg.Plain(plain); plain = mutableListOf() }
+            val chunk = list.subList(i, i + block)
+            val big = chunk.maxBy { (if (!it.isPhoto) 2 else 0) + (if (it.favorite) 1 else 0) }
+            out += Seg.Block(big, chunk.filter { it.id != big.id }, left)
+            left = !left; i += block; row += 2
+        } else {
+            val take = minOf(columns, list.size - i)
+            plain += list.subList(i, i + take); i += take; row += 1
+        }
+    }
+    if (plain.isNotEmpty()) out += Seg.Plain(plain)
+    return out
+}
+
+@Composable
+private fun MosaicBlock(seg: Seg.Block, columns: Int, gap: Dp, selected: Set<Long>, selecting: Boolean,
+                        onOpen: (Item) -> Unit, onToggle: (Item) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val cell = (maxWidth - gap * (columns - 1)) / columns
+        val bigSize = cell * 2 + gap
+        val bigTile = @Composable {
+            Tile(seg.big, seg.big.id in selected, selecting, compact = false, onOpen, onToggle, Modifier.size(bigSize), autoplay = !selecting)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+            if (seg.bigLeft) bigTile()
+            Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                for (r in seg.small.chunked(columns - 2)) Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    for (it in r) Tile(it, it.id in selected, selecting, compact = false, onOpen, onToggle, Modifier.size(cell))
+                }
+            }
+            if (!seg.bigLeft) bigTile()
+        }
+    }
+}
+
+/**
+ * A big tile's video plays by itself, silently and on a loop, a moment after it shows up (phone files only).
+ * It fades in over the thumbnail once the first frame is drawn, and stops when scrolled away.
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun AutoPreview(item: Item) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var start by remember(item.id) { mutableStateOf(false) }
+    var shown by remember(item.id) { mutableStateOf(false) }
+    LaunchedEffect(item.id) { delay(1500); start = true }
+    if (!start || item.uri == null) return
+    val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(450), label = "preview")
+    val player = remember(item.id) {
+        androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build().apply {
+            volume = 0f
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
+            setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(item.uri)))
+            addListener(object : androidx.media3.common.Player.Listener {
+                override fun onRenderedFirstFrame() { shown = true }
+            })
+            prepare(); playWhenReady = true
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(item.id) { onDispose { player.release() } }
+    androidx.compose.ui.viewinterop.AndroidView(factory = { c ->
+        androidx.media3.ui.PlayerView(c).apply {
+            useController = false
+            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            this.player = player
+        }
+    }, modifier = Modifier.fillMaxSize().alpha(alpha))
 }
 
 /** Drag handle on the right edge; shows the month while dragging, like Google Photos. */
@@ -256,11 +356,12 @@ private fun DateScroller(state: androidx.compose.foundation.lazy.grid.LazyGridSt
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Tile(item: Item, isSelected: Boolean, selecting: Boolean, compact: Boolean, onOpen: (Item) -> Unit, onToggle: (Item) -> Unit) {
+fun Tile(item: Item, isSelected: Boolean, selecting: Boolean, compact: Boolean, onOpen: (Item) -> Unit, onToggle: (Item) -> Unit,
+         modifier: Modifier = Modifier, autoplay: Boolean = false) {
     val scale by animateFloatAsState(if (isSelected) 0.86f else 1f, label = "sel")
     val shadow = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium, shadow = Shadow(Color.Black.copy(alpha = .6f), blurRadius = 6f))
     Box(
-        Modifier.aspectRatio(1f)
+        modifier.aspectRatio(1f)
             .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh)
             .onGloballyPositioned { TileBounds.map[item.id] = it.boundsInWindow() }
             .combinedClickable(onClick = { if (selecting) onToggle(item) else onOpen(item) }, onLongClick = { onToggle(item) })
@@ -269,6 +370,7 @@ fun Tile(item: Item, isSelected: Boolean, selecting: Boolean, compact: Boolean, 
             model = item.thumbModel, contentDescription = item.name, contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().scale(scale).clip(RoundedCornerShape(if (isSelected) 10.dp else 0.dp)),
         )
+        if (autoplay && !item.isPhoto && item.onPhone) Box(Modifier.fillMaxSize().scale(scale)) { AutoPreview(item) }
         if (!compact && !item.isPhoto) Row(Modifier.align(Alignment.TopEnd).padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(fmtDur(item.durationMs), style = shadow)
             Icon(Icons.Outlined.PlayCircle, null, tint = Color.White, modifier = Modifier.padding(start = 2.dp).size(14.dp))

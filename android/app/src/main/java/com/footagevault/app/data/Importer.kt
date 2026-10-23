@@ -20,7 +20,7 @@ import java.time.ZoneOffset
 object Importer {
     const val BUCKET = "Google Photos"
 
-    data class Source(val uri: Uri, val name: String, val size: Long)
+    data class Source(val uri: Uri, val name: String, val size: Long, val photo: Boolean = false)
     enum class Result { ADDED, DUPLICATE, FAILED }
 
     fun dir(ctx: Context) = File(ctx.filesDir, "imports").apply { mkdirs() }
@@ -35,8 +35,9 @@ object Importer {
     }
 
     private val VIDEO_EXT = Regex("""(?i)\.(mp4|mov|m4v|3gp|mkv|webm|avi|mts|m2ts)$""")
+    private val PHOTO_EXT = Regex("""(?i)\.(jpe?g|png|heic|heif|webp|dng|avif)$""")
 
-    /** Name and size of each shared video. Photos (and GIFs) are left out. */
+    /** Name and size of each shared photo or video. GIFs and other files are left out. */
     fun describe(ctx: Context, uris: List<Uri>): Pair<List<Source>, Int> {
         val out = mutableListOf<Source>()
         var skipped = 0
@@ -50,11 +51,18 @@ object Importer {
                     }
                 }
             }
-            val n = name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "video.mp4"
+            val n = name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "file"
             val mime = runCatching { ctx.contentResolver.getType(uri) }.getOrNull()
-            val video = mime?.startsWith("video/") == true || (mime == null || mime == "application/octet-stream") && VIDEO_EXT.containsMatchIn(n)
-            if (!video || MediaScanner.isGif(n)) { skipped++; continue }
-            out += Source(uri, if (VIDEO_EXT.containsMatchIn(n)) n else "$n.mp4", size)
+            val unknown = mime == null || mime == "application/octet-stream"
+            val video = mime?.startsWith("video/") == true || unknown && VIDEO_EXT.containsMatchIn(n)
+            val photo = !video && (mime?.startsWith("image/") == true || unknown && PHOTO_EXT.containsMatchIn(n))
+            if (!(video || photo) || mime == "image/gif" || MediaScanner.isGif(n)) { skipped++; continue }
+            val fixed = when {
+                video && !VIDEO_EXT.containsMatchIn(n) -> "$n.mp4"
+                photo && !PHOTO_EXT.containsMatchIn(n) -> "$n.jpg"
+                else -> n
+            }
+            out += Source(uri, fixed, size, photo)
         }
         return out to skipped
     }
@@ -70,7 +78,7 @@ object Importer {
         }
     }
 
-    /** Copies one video in, reads its details and queues it for backup (into [album] if given). */
+    /** Copies one photo or video in, reads its details and queues it for backup (into [album] if given). */
     fun import(ctx: Context, src: Source, album: String?, status: String = "queued", onBytes: (Long) -> Unit): Result {
         val db = Db.get(ctx)
         if (known(db, src.name, src.size, null)) return Result.DUPLICATE
@@ -94,7 +102,18 @@ object Importer {
 
         // The file's own details: recording time, length, size on screen, GPS.
         var durationMs = 0L; var w = 0; var h = 0; var taken = 0L; var lat: Double? = null; var lon: Double? = null
-        runCatching {
+        if (src.photo) runCatching {
+            val exif = android.media.ExifInterface(file.path)
+            taken = exifDate(exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL)
+                ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME))
+            val ll = FloatArray(2)
+            if (exif.getLatLong(ll)) { lat = ll[0].toDouble(); lon = ll[1].toDouble() }
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.path, o)
+            w = o.outWidth; h = o.outHeight
+            val turn = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)
+            if (turn in 5..8) { val t = w; w = h; h = t }
+        } else runCatching {
             MediaMetadataRetriever().use { mmr ->
                 mmr.setDataSource(file.path)
                 durationMs = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
@@ -108,16 +127,23 @@ object Importer {
                 }
             }
         }
-        if (known(db, src.name, file.length(), durationMs)) { file.delete(); return Result.DUPLICATE }
+        if (known(db, src.name, file.length(), if (src.photo) null else durationMs)) { file.delete(); return Result.DUPLICATE }
+        val kind = if (src.photo) "photo" else "video"
         val recorded = TimeGuess.forPhone(src.name, taken, file.lastModified())
         db.insert(cv(
             "uri" to Uri.fromFile(file).toString(), "name" to src.name, "size" to file.length(), "duration_ms" to durationMs,
             "width" to w, "height" to h, "recorded" to recorded, "bucket" to BUCKET, "status" to status,
-            "store" to Router.store(Prefs(ctx), "video", durationMs, file.length()),
+            "kind" to kind, "store" to Router.store(Prefs(ctx), kind, durationMs, file.length()),
             "lat" to lat, "lon" to lon, "geo_checked" to false, "pending_album" to album?.trim()?.ifBlank { null },
         ))
         return Result.ADDED
     }
+
+    /** Photo time from EXIF ("2026:10:17 17:55:41", the camera's local time). */
+    private fun exifDate(s: String?): Long = runCatching {
+        LocalDateTime.parse(s!!.trim(), java.time.format.DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss"))
+            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }.getOrDefault(0L)
 
     /** MP4 creation time ("20261017T175541.000Z", UTC). QuickTime's empty value is 1904: ignored. */
     fun parseMp4Date(s: String?): Long {

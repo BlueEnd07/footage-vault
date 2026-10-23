@@ -195,7 +195,7 @@ fun NameDialog(title: String, initial: String = "", confirm: String = "Save", on
  * Android still shows its own confirmation for anything on the phone.
  */
 @Composable
-fun DeleteDialog(items: List<Item>, vm: AppViewModel, onDone: () -> Unit) {
+fun DeleteDialog(items: List<Item>, vm: AppViewModel, onDeleted: (List<Item>) -> Unit = {}, onDone: () -> Unit) {
     val onPhone = items.filter { it.onPhone && it.uri != null }
     val backedUp = items.filter { it.ytId != null || it.tgMsg != null }
     val notBackedUp = onPhone.count { it.ytId == null && it.tgMsg == null }
@@ -220,11 +220,11 @@ fun DeleteDialog(items: List<Item>, vm: AppViewModel, onDone: () -> Unit) {
             Column(horizontalAlignment = Alignment.End) {
                 when {
                     backedUp.isNotEmpty() && onPhone.isNotEmpty() -> {
-                        TextButton(onClick = { vm.removeFromPhone(onPhone); onDone() }) { Text("Delete from phone") }
-                        TextButton(onClick = { vm.deleteEverywhere(items); onDone() }) { Text("Delete everywhere", color = MaterialTheme.colorScheme.error) }
+                        TextButton(onClick = { vm.removeFromPhone(onPhone); onDeleted(items); onDone() }) { Text("Delete from phone") }
+                        TextButton(onClick = { vm.deleteEverywhere(items); onDeleted(items); onDone() }) { Text("Delete everywhere", color = MaterialTheme.colorScheme.error) }
                     }
-                    backedUp.isNotEmpty() -> TextButton(onClick = { vm.deleteEverywhere(items); onDone() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-                    onPhone.isNotEmpty() -> TextButton(onClick = { vm.removeFromPhone(onPhone); onDone() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    backedUp.isNotEmpty() -> TextButton(onClick = { vm.deleteEverywhere(items); onDeleted(items); onDone() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    onPhone.isNotEmpty() -> TextButton(onClick = { vm.removeFromPhone(onPhone); onDeleted(items); onDone() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
                 TextButton(onClick = onDone) { Text("Cancel") }
             }

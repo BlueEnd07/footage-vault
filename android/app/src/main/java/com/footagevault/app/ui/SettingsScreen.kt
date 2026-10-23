@@ -121,8 +121,8 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                 Card(Icons.AutoMirrored.Outlined.Send, "Telegram · photos and short videos") { TelegramCard(vm) }
 
                 Card(Icons.Outlined.PhotoLibrary, "Back up from Google Photos") {
-                    Text("In Google Photos, open an album, select the videos, tap Share and choose Footage Vault. " +
-                        "You can name an album, and the videos upload with their date, place and name.")
+                    Text("In Google Photos, open an album, select the photos and videos, tap Share and choose Footage Vault. " +
+                        "You can name an album, and everything is backed up with its date, place and name.")
                     Text("Pasting an album link isn't possible: Google stopped letting apps open Google Photos albums in 2025.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -131,8 +131,8 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                             if (photos != null) ctx.startActivity(photos) else vm.say("Google Photos isn't installed")
                         }) { Text("Open Google Photos") }
                         OutlinedButton(onClick = {
-                            pickVideos.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
-                        }) { Text("Choose videos") }
+                            pickVideos.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        }) { Text("Choose photos & videos") }
                     }
                 }
 
@@ -184,10 +184,10 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
     }
 }
 
-/** Hands picked videos to the same screen as "Share → Footage Vault". */
+/** Hands picked photos and videos to the same screen as "Share → Footage Vault". */
 private fun importIntent(ctx: android.content.Context, uris: List<android.net.Uri>) =
     android.content.Intent(ctx, com.footagevault.app.ImportActivity::class.java)
-        .setAction(android.content.Intent.ACTION_SEND_MULTIPLE).setType("video/*")
+        .setAction(android.content.Intent.ACTION_SEND_MULTIPLE).setType("*/*")
         .putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(uris))
         .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
 

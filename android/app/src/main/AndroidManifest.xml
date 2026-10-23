@@ -48,12 +48,14 @@
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="video/*" />
+                <data android:mimeType="image/*" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="video/*" />
-                <!-- An album with photos and videos is shared as "*/*": photos are left out -->
+                <data android:mimeType="image/*" />
+                <!-- An album with photos and videos is shared as "*/*" -->
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>

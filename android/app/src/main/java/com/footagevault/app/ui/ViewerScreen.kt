@@ -1,5 +1,6 @@
 package com.footagevault.app.ui
 
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -144,17 +145,42 @@ fun openOnYouTube(ctx: Context, ytId: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ViewerScreen(
-    list: List<Item>, start: Int, vm: AppViewModel,
+    initial: List<Item>, start: Int, vm: AppViewModel,
     onClose: () -> Unit, onAddToAlbum: (Item) -> Unit, onDelete: (Item) -> Unit = {},
+    /** Deleted while the viewer is open: they leave the viewer (the next one takes their place). */
+    removed: Set<Long> = emptySet(),
 ) {
+    var hidden by remember { mutableStateOf(emptySet<Long>()) }
+    val list = initial.filter { it.id !in hidden }
+    val pages = rememberUpdatedState(list)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val pager = rememberPagerState(initialPage = start.coerceIn(0, (list.size - 1).coerceAtLeast(0))) { list.size }
+    val pager = rememberPagerState(initialPage = start.coerceIn(0, (list.size - 1).coerceAtLeast(0))) { pages.value.size }
     var showInfo by rememberSaveable { mutableStateOf(false) }
     var changingDate by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Pair<Item, Uri>?>(null) }
     val current = list.getOrNull(pager.currentPage) ?: return onClose()
+
+    // Deleting: the photo fades and shrinks away, then the next one settles into its place.
+    val leaving = remember { Animatable(0f) }
+    val arriving = remember { Animatable(1f) }
+    var leavingId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(removed) {
+        val gone = removed - hidden
+        if (gone.isEmpty()) return@LaunchedEffect
+        if (current.id in gone) {
+            leavingId = current.id
+            leaving.snapTo(0f)
+            leaving.animateTo(1f, tween(220, easing = FastOutSlowInEasing))
+        }
+        if (list.all { it.id in gone }) { onClose(); return@LaunchedEffect }
+        arriving.snapTo(0f)
+        hidden = hidden + gone
+        leavingId = null
+        leaving.snapTo(0f)
+        arriving.animateTo(1f, tween(260, easing = FastOutSlowInEasing))
+    }
     // Live version of the current item (favourite / status changes)
     val all by vm.items.collectAsState()
     val live = all.firstOrNull { it.id == current.id } ?: current
@@ -220,6 +246,13 @@ fun ViewerScreen(
             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { list[it].id }, beyondViewportPageCount = 1) { page ->
                 val item = all.firstOrNull { it.id == list[page].id } ?: list[page]
                 val isCurrent = page == pager.currentPage
+                Box(Modifier.fillMaxSize().graphicsLayer {
+                    if (item.id == leavingId) {
+                        alpha = 1f - leaving.value; scaleX = 1f - 0.12f * leaving.value; scaleY = scaleX
+                    } else if (isCurrent) {
+                        alpha = 0.3f + 0.7f * arriving.value; scaleX = 0.94f + 0.06f * arriving.value; scaleY = scaleX
+                    }
+                }) {
                 when {
                     !item.onPhone && item.tgMsg != null -> TelegramView(item, vm.prefs, isCurrent)
                     item.isPhoto && item.onPhone && item.uri != null -> PhotoView(item)
@@ -242,6 +275,7 @@ fun ViewerScreen(
                             }
                         }
                     }
+                }
                 }
             }
 

@@ -28,8 +28,8 @@ import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Copies videos shared in from Google Photos, in the background, a few at a time. Uploads wait until every
- * video is copied (the copies are "copied", not "queued", while this runs), so downloading from Google Photos
+ * Copies photos and videos shared in from Google Photos, in the background, a few at a time. Uploads wait until
+ * every one is copied (the copies are "copied", not "queued", while this runs), so downloading from Google Photos
  * and uploading to YouTube don't fight over the connection.
  *
  * Share links are only lent to the screen that received them; passing them here with the read grant keeps
@@ -55,6 +55,7 @@ class ImportService : Service() {
                 .putParcelableArrayListExtra("uris", ArrayList(sources.map { it.uri }))
                 .putExtra("names", sources.map { it.name }.toTypedArray())
                 .putExtra("sizes", sources.map { it.size }.toLongArray())
+                .putExtra("photos", sources.map { it.photo }.toBooleanArray())
                 .putExtra("album", album?.trim()?.ifBlank { null })
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             i.clipData = clip
@@ -83,7 +84,9 @@ class ImportService : Service() {
         }
         // Photo-picker links can be kept; Google Photos share links ride on the grant above.
         for (u in uris) runCatching { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        val batch = Batch(uris.indices.map { Importer.Source(uris[it], names[it], sizes[it]) }, intent?.getStringExtra("album"), startId)
+        val photos = intent?.getBooleanArrayExtra("photos") ?: BooleanArray(uris.size)
+        val batch = Batch(uris.indices.map { Importer.Source(uris[it], names[it], sizes[it], photos.getOrElse(it) { false }) },
+            intent?.getStringExtra("album"), startId)
         synchronized(lock) {
             pending += batch
             total += batch.sources.size

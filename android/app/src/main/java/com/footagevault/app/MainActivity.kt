@@ -170,6 +170,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     val selected = remember { mutableStateListOf<Long>() }
     var picker by remember { mutableStateOf<List<Item>?>(null) }
     var deleting by remember { mutableStateOf<List<Item>?>(null) }  // delete dialog
+    var viewerRemoved by remember { mutableStateOf(emptySet<Long>()) }  // deleted while the viewer is open
     var redating by remember { mutableStateOf<List<Item>?>(null) }  // change date dialog
     var dialog by remember { mutableStateOf<String?>(null) }  // "newAlbum" | "rename" | "deleteAlbum" | "saveEvent"
     val snack = remember { SnackbarHostState() }
@@ -342,9 +343,12 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
 
     viewer?.let { (list, start) ->
         if (list.isEmpty()) { viewer = null; return@let }
-        ViewerScreen(list, start, vm, onClose = { viewer = null }, onAddToAlbum = { picker = listOf(it) }, onDelete = { deleting = listOf(it) })
+        ViewerScreen(list, start, vm, onClose = { viewer = null; viewerRemoved = emptySet() }, onAddToAlbum = { picker = listOf(it) },
+            onDelete = { deleting = listOf(it) }, removed = viewerRemoved)
     }
-    deleting?.let { list -> DeleteDialog(list, vm) { deleting = null; selected.clear() } }
+    deleting?.let { list ->
+        DeleteDialog(list, vm, onDeleted = { if (viewer != null) viewerRemoved = viewerRemoved + it.map { x -> x.id } }) { deleting = null; selected.clear() }
+    }
     redating?.let { list ->
         ChangeDateDialog(list, onDone = { d, t -> vm.setDate(list, d, t); redating = null; selected.clear() }, onDismiss = { redating = null })
     }

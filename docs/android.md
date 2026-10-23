@@ -85,7 +85,7 @@ Set it up once in **Settings → Telegram · photos and short videos**:
 ## From Google Photos
 
 Videos already in Google Photos can be moved to YouTube through the share sheet:
-1. In Google Photos, open an album (or any view), select the videos and tap **Share → Footage Vault**.
+1. In Google Photos, open an album (or any view), select the photos and videos and tap **Share → Footage Vault**.
    **Settings → Back up from Google Photos** has the same steps, an **Open Google Photos** button, and
    **Choose videos**, which opens Android's photo picker (it shows Google Photos videos and albums too when the
    phone's picker is linked to Google Photos).
@@ -99,7 +99,7 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
 
 - Videos already in your library (same file name and size or length) are skipped, and the app checks your channel
   before uploading, so nothing goes up twice.
-- Photos and GIFs in the selection are left out.
+- Photos go to Telegram, so connect it first (Settings → Telegram); otherwise they wait. GIFs are left out.
 - Google Photos downloads cloud-only videos before sharing them, so you need free space for the batch. Large
   batches are best shared a few at a time, on Wi-Fi.
 - Pasting an album link isn't possible: Google no longer lets apps read Google Photos albums or share links, so
@@ -109,6 +109,9 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
 
 - **Videos** tab: everything on your phone and on your channel, newest first, under Today / Yesterday / day headers.
 - **Pinch** with two fingers to change the tile size. Zoom all the way out for the **month view**.
+- **Big tiles:** at the two roomiest sizes, a busy day shows some tiles big (2×2), like Google Photos. Videos and
+  favourites are picked first. A big video that's on the phone plays by itself, silently and on a loop, after a
+  moment.
 - **Date scroller:** while scrolling, grab the handle on the right edge to jump through months.
 - **Badges on tiles:**
   - **red cloud**: not backed up yet
@@ -126,6 +129,7 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
   - **Unlisted / public, only on YouTube:** plays straight away in YouTube's player inside the app.
   - **Private, only on YouTube:** YouTube only plays these in its own app, so you get **Play on YouTube**.
     Make videos unlisted in YouTube Studio to play them inside Footage Vault.
+- **Delete** from the viewer: the photo or video shrinks away and the next one takes its place.
 - **Swipe left/right** for the next or previous video (also inside the YouTube player). **Swipe down** to close.
 - **Double-tap** the left or right side to skip 10 seconds.
 - Long videos **resume** where you stopped.
