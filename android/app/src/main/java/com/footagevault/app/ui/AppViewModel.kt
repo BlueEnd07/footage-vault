@@ -221,6 +221,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         sendAlbumLink(c.pid, c.name)
     }
 
+    /**
+     * Several videos as one link: a new unlisted YouTube playlist of them, in the order they were shot. Others can only
+     * watch unlisted videos, so private ones in it are made unlisted first. Items not on YouTube are left out.
+     */
+    fun sharePlaylist(list: List<Item>) = io {
+        val vids = list.filter { it.ytId != null }.sortedBy { it.recorded }
+        if (vids.isEmpty()) return@io say("None of these are on YouTube yet")
+        _busy.value = true
+        var refused = 0
+        try {
+            val day = java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.getDefault())
+                .format(java.time.Instant.ofEpochMilli(vids.first().recorded).atZone(java.time.ZoneId.systemDefault()))
+            val title = "Shared · $day"
+            for (it in vids.filter { it.privacy == "private" }) {
+                val got = try { yt.setPrivacy(it.ytId!!, "unlisted") } catch (e: ApiException) { if (e.isQuota) throw e; null }
+                if (got == "unlisted") db.update(it.id, "privacy" to "unlisted") else refused++
+            }
+            val pid = yt.createPlaylist(title, "unlisted")
+            db.addAlbum(pid, title)
+            for (it in vids) db.addToAlbum(pid, it.ytId!!, yt.addToPlaylist(pid, it.ytId))
+            sendAlbumLink(pid, title)
+        } finally { _busy.value = false }
+        val left = list.size - vids.size
+        when {
+            refused > 0 -> { prefs.unlistRefused = true; _unlistHelp.value = true }
+            left > 0 -> say("$left not on YouTube yet ${if (left == 1) "was" else "were"} left out")
+        }
+    }
+
     private fun sendAlbumLink(pid: String, title: String) {
         val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
             .putExtra(android.content.Intent.EXTRA_SUBJECT, title)

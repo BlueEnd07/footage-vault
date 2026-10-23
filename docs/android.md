@@ -139,6 +139,8 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
 - Long videos **resume** where you stopped.
 - The bottom bar has **Share**, **Favourite**, **Edit** (photos), **Info** (date, place, size, backup status),
   **Add to** (album) and **Delete**.
+- **Sharing several videos** from the selection bar asks: **One playlist link** (a new unlisted YouTube playlist of
+  them, in the order they were shot; private ones are made unlisted so others can watch) or **Send the files**.
 - **Share** sends the files themselves: photos as images, videos as video files. Ones that are only in your backup
   are fetched first. A video that lives only on YouTube is shared as its link.
 - **Photos:** pinch or double-tap to zoom. A photo that's only on Telegram shows its preview at once and sharpens when

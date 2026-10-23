@@ -97,9 +97,9 @@ class YouTube(private val token: suspend () -> String) {
         pages("$api/playlistItems?part=contentDetails&playlistId=${enc(pid)}")
             .map { it.getString("id") to it.getJSONObject("contentDetails").getString("videoId") }
 
-    suspend fun createPlaylist(title: String): String = call("POST", "$api/playlists?part=snippet,status", JSONObject()
+    suspend fun createPlaylist(title: String, privacy: String = "private"): String = call("POST", "$api/playlists?part=snippet,status", JSONObject()
         .put("snippet", JSONObject().put("title", title.take(150)).put("description", "Footage Vault album"))
-        .put("status", JSONObject().put("privacyStatus", "private"))).getString("id")
+        .put("status", JSONObject().put("privacyStatus", privacy))).getString("id")
 
     suspend fun renamePlaylist(pid: String, title: String) {
         call("PUT", "$api/playlists?part=snippet", JSONObject().put("id", pid)

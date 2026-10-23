@@ -175,6 +175,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     var picker by remember { mutableStateOf<List<Item>?>(null) }
     var deleting by remember { mutableStateOf<List<Item>?>(null) }  // delete dialog
     var viewerRemoved by remember { mutableStateOf(emptySet<Long>()) }  // deleted while the viewer is open
+    var sharing by remember { mutableStateOf<List<Item>?>(null) }  // share several: files or one playlist link
     var redating by remember { mutableStateOf<List<Item>?>(null) }  // change date dialog
     var dialog by remember { mutableStateOf<String?>(null) }  // "newAlbum" | "rename" | "deleteAlbum" | "saveEvent"
     val snack = remember { SnackbarHostState() }
@@ -239,7 +240,11 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                 actions = {
                     val allFav = selItems.all { it.favorite }
                     IconButton(onClick = { vm.setFavorite(selected.toList(), !allFav); selected.clear() }) { Icon(Icons.Outlined.FavoriteBorder, "Favourite") }
-                    IconButton(onClick = { vm.share(selItems); selected.clear() }) { Icon(Icons.Outlined.Share, "Share") }
+                    IconButton(onClick = {
+                        // Several videos on YouTube: offer one playlist link besides sending the files.
+                        if (selItems.size > 1 && selItems.count { it.ytId != null } > 1) sharing = selItems
+                        else { vm.share(selItems); selected.clear() }
+                    }) { Icon(Icons.Outlined.Share, "Share") }
                     IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
                     IconButton(onClick = { redating = selItems }) { Icon(Icons.Outlined.EditCalendar, "Change date") }
                     IconButton(onClick = { deleting = selItems }) { Icon(Icons.Outlined.Delete, "Delete") }
@@ -357,6 +362,23 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
         ViewerScreen(list, start, vm, onClose = { viewer = null; viewerRemoved = emptySet() }, onAddToAlbum = { picker = listOf(it) },
             onDelete = { deleting = listOf(it) }, removed = viewerRemoved)
     }
+    sharing?.let { list ->
+        val onYt = list.count { it.ytId != null }
+        AlertDialog(
+            onDismissRequest = { sharing = null },
+            title = { Text("Share ${com.footagevault.app.data.countWords(list)}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ShareOption("One playlist link", "A YouTube playlist of the $onYt video${if (onYt == 1) "" else "s"}, in order. Anyone with the link can watch; private ones are made unlisted.") {
+                        sharing = null; vm.sharePlaylist(list); selected.clear()
+                    }
+                    ShareOption("Send the files", "The photos and videos themselves.") { sharing = null; vm.share(list); selected.clear() }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { sharing = null }) { Text("Cancel") } },
+        )
+    }
     // YouTube kept them private: the bulk edit in YouTube Studio always works.
     val unlistHelp by vm.unlistHelp.collectAsState()
     if (unlistHelp) AlertDialog(
@@ -456,6 +478,16 @@ private fun StatusPill(items: List<Item>, signedIn: Boolean, vm: AppViewModel, o
             else Icon(icon, null, Modifier.size(18.dp), tint = if (text == "Backed up") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(6.dp))
             Text(text, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun ShareOption(title: String, sub: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

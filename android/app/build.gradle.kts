@@ -12,8 +12,8 @@ android {
         applicationId = "com.footagevault.app"
         minSdk = 30          // Android 11+: one-tap system delete (MediaStore.createDeleteRequest)
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.13.1"
+        versionCode = 22
+        versionName = "1.13.2"
         // Telegram's engine (TDLib) is native code: only the 64-bit ARM build that phones use, to keep the app small.
         ndk { abiFilters += "arm64-v8a" }
     }
