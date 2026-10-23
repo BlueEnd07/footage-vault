@@ -28,6 +28,7 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.sync.Mutex
+import org.json.JSONObject
 
 /** Scans the gallery, uploads queued videos to YouTube, and keeps the library in sync. */
 class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -100,13 +101,28 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             val title = "Backing up · $left left"
             val shown = tryForeground(title, it.name)
             db.update(it.id, "status" to "uploading", "error" to null)
+            suspend fun finished(result: JSONObject) {
+                val vid = result.getString("id")
+                val privacy = result.optJSONObject("status")?.optString("privacyStatus")
+                if (prefs.privacy == "unlisted" && privacy == "private") prefs.forcedPrivate = true
+                db.update(it.id, "status" to "processing", "yt_id" to vid, "upload_url" to null, "progress" to 1f, "privacy" to privacy)
+            }
             try {
                 refreshToken()
                 var session = it.uploadUrl
-                var start = session?.let { s -> yt.uploadedBytes(s, it.size) }
-                if (session == null || start == null) {
+                var start = 0L
+                if (session != null) {
+                    when (val state = yt.probeUpload(session, it.size)) {
+                        is YouTube.UploadState.Resume -> start = state.offset
+                        is YouTube.UploadState.Complete -> { finished(state.video); continue }
+                        YouTube.UploadState.Expired -> {
+                            session = null
+                            db.update(it.id, "upload_url" to null)
+                        }
+                    }
+                }
+                if (session == null) {
                     session = yt.startUpload(sync.uploadMeta(it), it.size)
-                    start = 0L
                     db.update(it.id, "upload_url" to session)
                 }
                 var lastPct = -1
@@ -115,13 +131,10 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     if (pct != lastPct) {
                         lastPct = pct
                         db.update(it.id, "progress" to sent.toFloat() / it.size)
-                        if (shown) setForegroundAsync(foreground(title, "${it.name} · $pct%", pct))
+                        if (shown) setForegroundAsync(foreground(title, "${it.name} -  $pct%", pct))
                     }
                 }
-                val vid = result.getString("id")
-                val privacy = result.optJSONObject("status")?.optString("privacyStatus")
-                if (prefs.privacy == "unlisted" && privacy == "private") prefs.forcedPrivate = true
-                db.update(it.id, "status" to "processing", "yt_id" to vid, "upload_url" to null, "progress" to 1f, "privacy" to privacy)
+                finished(result)
             } catch (e: ApiException) {
                 if (e.isQuota) {
                     db.update(it.id, "status" to "queued")

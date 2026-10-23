@@ -41,6 +41,25 @@ function Find-Python {
     return $null
 }
 
+function Test-ClientSecret($path) {
+    # Returns $null when the file is a usable Desktop-app key, otherwise the reason it isn't.
+    try { $j = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return "it isn't valid JSON" }
+    if (-not $j.installed) {
+        return "it isn't a Desktop app key (in Google Cloud, create the client as type 'Desktop app')"
+    }
+    if (-not $j.installed.client_id -or -not $j.installed.client_secret) {
+        return "it has no client_id / client_secret"
+    }
+    return $null
+}
+
+function App-Ready {
+    try {
+        $null = Invoke-RestMethod "http://127.0.0.1:8765/api/status" -TimeoutSec 1
+        return $true
+    } catch { return $false }
+}
+
 function Winget-Install($id, $what) {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Fail "$what is missing and winget isn't available. Install $what yourself, then run this again."
@@ -81,6 +100,7 @@ if (-not (Test-Path $venvPy)) {
 & $venvPy -m pip install --disable-pip-version-check -q --upgrade pip | Out-Null
 & $venvPy -m pip install --disable-pip-version-check -q -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Fail "pip install -r requirements.txt failed (see above)" }
+Copy-Item requirements.txt ".venv\.requirements-ok" -Force
 Ok "packages installed"
 
 # ---------------------------------------------------------------- 3. face models
@@ -101,16 +121,34 @@ if (-not $hasKey) {
         Ok "found $($dl.Name) in Downloads and copied it as client_secret.json"
     }
 }
-if ($hasKey) { Ok "client_secret.json present" }
-else { Warn "client_secret.json is missing. Follow SETUP.md section 2 (about 15 minutes), save the file in this folder, then click Connect YouTube in the app." }
+if ($hasKey) {
+    $bad = Test-ClientSecret (Join-Path $PSScriptRoot "client_secret.json")
+    if ($bad) {
+        $hasKey = $false
+        Warn "client_secret.json is there, but $bad. Download the right key (SETUP.md section 2.5) and replace it."
+    } else {
+        Ok "client_secret.json is a Desktop app key"
+    }
+}
+if (-not $hasKey -and -not (Test-Path (Join-Path $PSScriptRoot "client_secret.json"))) {
+    Warn "client_secret.json is missing. Follow SETUP.md section 2 (about 15 minutes), save the file in this folder, then click Connect YouTube in the app."
+}
 
 # ---------------------------------------------------------------- 5. start
 if ($NoStart) {
     Step "Installed. Start it any time by double-clicking start.bat"
+} elseif (App-Ready) {
+    Step "Footage Vault is already running: http://localhost:8765"
 } else {
     Step "Starting Footage Vault (tray icon near the clock)"
     Start-Process -FilePath (Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe") -ArgumentList "run.py" -WorkingDirectory $PSScriptRoot
-    Ok "running: open http://localhost:8765"
+    $ready = $false
+    for ($i = 0; $i -lt 40; $i++) {
+        if (App-Ready) { $ready = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($ready) { Ok "running: open http://localhost:8765" }
+    else { Warn "The app didn't answer yet. Open http://localhost:8765 in a few seconds, or check data\vault.log." }
 }
 if (-not $hasKey) { Write-Host "`nNEXT: create your Google key (SETUP.md section 2), then click Connect YouTube." -ForegroundColor Yellow }
 else { Write-Host "`nNEXT: open http://localhost:8765 and click Connect YouTube." -ForegroundColor Green }

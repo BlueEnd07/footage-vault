@@ -8,15 +8,24 @@ self.addEventListener("push", (e) => {
   e.waitUntil(self.registration.showNotification(d.title || "Footage Vault", {
     body: d.body || "",
     tag: d.tag || undefined,
-    data: { url: d.url || "/" },
+    data: { url: safeUrl(d.url) },
     icon: "/static/icon-192.png",
     badge: "/static/badge-96.png",
   }));
 });
 
+function safeUrl(raw) {
+  try {
+    const u = new URL(String(raw || "/"), self.location.origin);
+    return u.origin === self.location.origin ? u.pathname + u.search + u.hash : "/";
+  } catch {
+    return "/";
+  }
+}
+
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = new URL(e.notification.data.url || "/", self.location.origin).href;
+  const url = new URL(safeUrl(e.notification.data && e.notification.data.url), self.location.origin).href;
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const w of wins) {

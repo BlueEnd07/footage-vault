@@ -14,10 +14,12 @@ Use the same Google Cloud project as the PC app, or create one: follow [SETUP.md
 2. Choose application type **Android**.
 3. Enter these values:
    - **Package name:** `com.footagevault.app`
-   - **SHA-1 certificate fingerprint:** the fingerprint of the key the app is signed with. For the APKs on this
-     repo's [Releases](https://github.com/BlueEnd07/footage-vault/releases) page it's
-     `A0:47:5F:E8:32:05:AE:9A:F3:47:34:5A:AF:7A:69:86:E2:49:6B:EC`. If you build the app yourself with your own key,
-     use your key's SHA-1 ([development.md](development.md)).
+   - **SHA-1 certificate fingerprint:** the fingerprint of the key the app is signed with.
+     Releases from 1.13.3 (versionCode 23) use
+     `49:AA:78:6F:93:FF:A7:98:DB:F5:B5:04:BF:E8:8D:A2:1D:45:A5:BE`; older releases use
+     `A0:47:5F:E8:32:05:AE:9A:F3:47:34:5A:AF:7A:69:86:E2:49:6B:EC`. Add both (a second Android client is fine)
+     during the changeover. If you build the app yourself with your own key, use that key's SHA-1
+     ([release.md](release.md)).
 4. Click **Create**. You don't need to download anything, and the app contains no secret.
 
 ### 2. Install the app
@@ -37,6 +39,10 @@ Use the same Google Cloud project as the PC app, or create one: follow [SETUP.md
 The app checks this repo's Releases. When a new version is out, an **Update available** card appears on the
 Videos screen: tap **Update**, then **Install**. The first time, Android asks you to allow Footage Vault to install
 apps; switch it on, go back and tap Update again. You can also check by hand in **Settings → App version**.
+
+If you installed a version before 1.13.3, the first update to 1.13.3 (or later) can't be installed over it because it
+uses a new signing key: uninstall Footage Vault, install the new APK from Releases, and sign in again. Your videos stay
+on YouTube. After signing in, choose **Only new videos** so the ones already backed up aren't uploaded again.
 
 ## Backup
 

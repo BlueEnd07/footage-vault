@@ -123,7 +123,7 @@
   </nav>
 
   <div id="sendQueue" class="send-card" hidden></div>
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <!-- Viewer -->
   <div id="viewer" class="viewer" hidden>
@@ -166,7 +166,7 @@
       <div class="sheet-head"><h2 id="pickerTitle">Add to album</h2><button class="ibtn" data-close="picker" aria-label="Close" data-icon="close"></button></div>
       <form id="pickerNew" class="new-album">
         <span class="na-icon" data-icon="add"></span>
-        <input id="pickerName" placeholder="New album" maxlength="150" autocomplete="off">
+        <input id="pickerName" placeholder="New album" aria-label="New album name" maxlength="150" autocomplete="off">
         <button class="btn filled">Create</button>
       </form>
       <div id="pickerList" class="picker-list"></div>
@@ -203,7 +203,7 @@
     <form class="sheet-body narrow" id="dlgForm">
       <h2 id="dlgTitle"></h2>
       <div id="dlgText" class="dlg-text"></div>
-      <input id="dlgInput" autocomplete="off" hidden>
+      <input id="dlgInput" autocomplete="off" aria-labelledby="dlgTitle" hidden>
       <div class="dlg-actions">
         <button type="button" class="btn text" id="dlgCancel">Cancel</button>
         <button class="btn filled" id="dlgOk">OK</button>
@@ -236,7 +236,7 @@
             <li>Copy that page's address (<b>⋮ → Share → Copy</b>, or tap the address bar and copy) and paste it here:</li>
           </ol>
           <form id="pasteForm" class="row">
-            <input id="pasteUrl" placeholder="http://localhost:8765/oauth/callback?…" autocomplete="off">
+            <input id="pasteUrl" placeholder="http://localhost:8765/oauth/callback?…" aria-label="Callback address" autocomplete="off">
             <button type="button" class="btn outline" id="pasteBtn">Paste</button>
             <button class="btn filled">Finish</button>
           </form>
@@ -296,7 +296,7 @@
       <section class="set-card pc-only">
         <div class="set-title"><span data-icon="delete_sweep"></span>Deleting originals</div>
         <p class="muted">Once YouTube has processed a video, its file on this PC goes to the Recycle Bin after:</p>
-        <div class="row"><input id="deleteDays" type="number" min="0" max="365"> <span>days</span>
+        <div class="row"><input id="deleteDays" type="number" min="0" max="365" aria-label="Days before deleting originals"> <span>days</span>
           <button class="btn outline" id="saveDays">Save</button></div>
       </section>
     </div>

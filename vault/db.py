@@ -31,12 +31,15 @@ CREATE TABLE IF NOT EXISTS videos (
     attempts     INTEGER NOT NULL DEFAULT 0,
     error        TEXT,
     youtube_id   TEXT,
+    upload_url   TEXT,                  -- resumable session, so a restart continues the upload
+    upload_offset INTEGER NOT NULL DEFAULT 0,
     processed_at TEXT,
     delete_after TEXT,
     deleted_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
 CREATE INDEX IF NOT EXISTS idx_videos_recorded ON videos(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_videos_youtube ON videos(youtube_id);
 
 -- Albums mirror private YouTube playlists. Changes are made here first and
 -- synced by the worker (title_synced / item_id / removed / deleted).
@@ -95,6 +98,13 @@ CREATE TABLE IF NOT EXISTS push_subs (
 """
 
 _local = threading.local()
+_revision = 0
+_rev_lock = threading.Lock()
+
+
+def revision() -> int:
+    """Cheap change counter for the browser's render cache (this process only)."""
+    return _revision
 
 
 def conn() -> sqlite3.Connection:
@@ -103,6 +113,7 @@ def conn() -> sqlite3.Connection:
         c = sqlite3.connect(DB_PATH, timeout=30)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
         _local.c = c
     return c
 
@@ -133,6 +144,10 @@ def init() -> None:
     if "privacy" not in cols:
         # For videos found on YouTube (uploaded outside the vault): private / unlisted / public
         c.execute("ALTER TABLE videos ADD COLUMN privacy TEXT")
+    if "upload_url" not in cols:
+        # Resumable upload session, kept across restarts and quota pauses.
+        c.execute("ALTER TABLE videos ADD COLUMN upload_url TEXT")
+        c.execute("ALTER TABLE videos ADD COLUMN upload_offset INTEGER NOT NULL DEFAULT 0")
     c.commit()
 
 
@@ -146,9 +161,12 @@ def row(sql: str, args=()) -> dict | None:
 
 
 def run(sql: str, args=()) -> int:
+    global _revision
     c = conn()
     cur = c.execute(sql, args)
     c.commit()
+    with _rev_lock:
+        _revision += 1
     return cur.lastrowid
 
 

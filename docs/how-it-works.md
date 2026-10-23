@@ -123,7 +123,7 @@ are never the same person. Face crops and face prints stay in `data/` and are ne
 | | PC app | Android app |
 |---|---|---|
 | Scheduler | Threads in `vault/worker.py` and `vault/faces.py` | WorkManager, every 15 min plus when the app opens |
-| Upload | Resumable, 16 MB chunks. Restarts from 0 if the app closes mid-upload | Resumable, 8 MB chunks. The session URL is stored, so it resumes after restarts |
+| Upload | Resumable, 16 MB chunks. The session URL is stored, so it resumes after restarts or a quota pause | Resumable, 8 MB chunks. The session URL is stored, so it resumes after restarts |
 | Rules | Pause from the tray; keeps the PC awake while uploading | Wi-Fi only / charging only / pause; progress notification |
 | Pull from YouTube | Every 30 min: new videos, re-dating, playlists | Every 30 min, and on pull-to-refresh |
 

@@ -1,5 +1,7 @@
+import asyncio
 import json
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -9,6 +11,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -16,10 +19,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, events, faces, media, notify, worker, youtube
-from .config import INCOMING, PREVIEWS, STATIC, THUMBS, load_settings, save_settings
+from . import auth, db, events, faces, media, notify, worker, youtube
+from .config import INCOMING, LOCK, PREVIEWS, STATIC, THUMBS, load_settings, save_settings
 
-LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Reachable without the PIN: app shell files the browser fetches without cookies.
 PUBLIC_PATHS = ("/pin", "/manifest.webmanifest", "/sw.js", "/static/")
 
@@ -36,12 +38,12 @@ app = FastAPI(lifespan=lifespan)
 def is_local(request: Request) -> bool:
     """True only for a browser on this PC. Requests proxied by `tailscale serve`
     also arrive from 127.0.0.1, so those are recognised by their headers."""
-    if not request.client or request.client.host not in LOCAL_HOSTS:
+    if not request.client or request.client.host not in auth.LOCAL_HOSTS:
         return False
     h = request.headers
     if "x-forwarded-for" in h or "tailscale-user-login" in h or "x-forwarded-host" in h:
         return False
-    return h.get("host", "").startswith(("localhost", "127.0.0.1", "[::1]"))
+    return auth.is_local_host(h.get("host"))
 
 
 def require_local(request: Request):
@@ -92,30 +94,94 @@ PIN_PAGE = """<!doctype html><html><head><meta charset="utf-8">
 form{display:grid;gap:12px;text-align:center}input,button{font-size:20px;padding:12px;border-radius:10px;border:0}
 input{text-align:center;letter-spacing:6px}button{background:#4f8cff;color:#fff}</style></head>
 <body><form method="post" action="/pin"><div>Enter the PIN shown on your PC</div>
-<input name="pin" inputmode="numeric" autofocus><button>Open vault</button></form></body></html>"""
+<input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code" autofocus><button>Open vault</button></form></body></html>"""
+
+
+def _client_address(request: Request) -> str:
+    """The real client for rate limiting. X-Forwarded-For is only trusted from a local proxy
+    (Tailscale), never from a device on the LAN, which could otherwise dodge the limit."""
+    peer = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded and peer in auth.LOCAL_HOSTS:
+        return forwarded.split(",")[0].strip()
+    return peer
+
+
+def _start_session(s: dict) -> str:
+    """Create a session token and remember only its hash."""
+    token, digest = auth.new_session()
+    sessions = auth.prune_sessions(s.get("sessions") or {})
+    sessions[digest] = auth.session_expiry()
+    s["sessions"] = sessions
+    save_settings(s)
+    return token
 
 
 @app.middleware("http")
 async def pin_gate(request: Request, call_next):
+    if request.method not in auth.SAFE_METHODS and auth.cross_site(request):
+        return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
+
     path = request.url.path
     if is_local(request) or path.startswith(PUBLIC_PATHS):
         return await call_next(request)
-    if request.cookies.get("vault_pin") == load_settings()["pin"]:
+    s = load_settings()
+    if auth.valid_session(request.cookies.get(auth.SESSION_COOKIE), s.get("sessions")):
         return await call_next(request)
     if path.startswith("/api"):
         return JSONResponse({"detail": "PIN required"}, status_code=401)
     return HTMLResponse(PIN_PAGE)
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https://tile.openstreetmap.org; media-src 'self' blob:; "
+        "frame-src https://www.youtube.com https://www.youtube-nocookie.com; "
+        "connect-src 'self'; font-src 'self'; worker-src 'self'",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.post("/pin")
 async def submit_pin(request: Request):
-    form = (await request.body()).decode()
-    pin = dict(p.split("=", 1) for p in form.split("&") if "=" in p).get("pin", "")
-    if pin != load_settings()["pin"]:
-        return HTMLResponse(PIN_PAGE.replace("Enter the PIN", "Wrong PIN. Enter the PIN"))
+    address = _client_address(request)
+    wait = auth.limiter.retry_after(address)
+    if wait:
+        return HTMLResponse(PIN_PAGE.replace("Enter the PIN", f"Too many tries. Wait {wait} s, then enter the PIN"),
+                            status_code=429, headers={"Retry-After": str(wait)})
+
+    form = parse_qs((await request.body()).decode("utf-8", "replace"))
+    pin = (form.get("pin") or [""])[0]
+    s = load_settings()
+    if not secrets.compare_digest(str(pin), str(s["pin"])):
+        auth.limiter.fail(address)
+        await asyncio.sleep(0.25)  # slow automated guessing without blocking the worker
+        wait = auth.limiter.retry_after(address)
+        message = f"Too many tries. Wait {wait} s, then enter the PIN" if wait else "Wrong PIN. Enter the PIN"
+        return HTMLResponse(PIN_PAGE.replace("Enter the PIN", message),
+                            status_code=429 if wait else 401,
+                            headers={"Retry-After": str(wait)} if wait else None)
+
+    auth.limiter.reset(address)
+    with LOCK:  # read-modify-save sessions together
+        s = load_settings()
+        token = _start_session(s)
     resp = HTMLResponse('<meta http-equiv="refresh" content="0;url=/">')
-    resp.set_cookie("vault_pin", pin, max_age=365 * 86400, httponly=True, samesite="lax",
-                    secure=request.headers.get("x-forwarded-proto") == "https")
+    resp.set_cookie(auth.SESSION_COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True,
+                    samesite="strict", path="/",
+                    secure=request.url.scheme == "https" or
+                    request.headers.get("x-forwarded-proto") == "https")
     return resp
 
 
@@ -156,13 +222,20 @@ def status(request: Request):
         "takeout": worker.state["takeout"],
         "youtube_only": db.row("SELECT COUNT(*) n FROM videos WHERE status='youtube'")["n"],
         "faces": faces.progress(),  # {checked, total, models_ok, ...}
+        "rev": db.revision(),
     }
     if is_local(request):
         out["lan_url"] = f"http://{lan_ip()}:{s['port']}"
-        out["pin"] = s["pin"]
         out["tailscale"] = tailscale_info()
         out["watch_folders"] = s.get("watch_folders") or []
     return out
+
+
+@app.get("/api/pin")
+def get_pin(request: Request):
+    """Shown in the PC's Settings sheet; never included in the polled status payload."""
+    require_local(request)
+    return {"pin": load_settings()["pin"]}
 
 
 @app.get("/api/channel")
@@ -234,20 +307,22 @@ def import_takeout(req: FolderReq, request: Request):
 def add_watch_folder(req: FolderReq, request: Request):
     require_local(request)
     folder = str(_folder(req.folder))
-    s = load_settings()
-    folders = [f for f in s.get("watch_folders") or [] if f["path"].lower() != folder.lower()]
-    folders.append({"path": folder, "source": "phone" if req.source == "phone" else "pc"})
-    s["watch_folders"] = folders
-    save_settings(s)
+    with LOCK:
+        s = load_settings()
+        folders = [f for f in s.get("watch_folders") or [] if f["path"].lower() != folder.lower()]
+        folders.append({"path": folder, "source": "phone" if req.source == "phone" else "pc"})
+        s["watch_folders"] = folders
+        save_settings(s)
     return {"ok": True}
 
 
 @app.post("/api/watch/remove")
 def remove_watch_folder(req: FolderReq, request: Request):
     require_local(request)
-    s = load_settings()
-    s["watch_folders"] = [f for f in s.get("watch_folders") or [] if f["path"] != req.folder]
-    save_settings(s)
+    with LOCK:
+        s = load_settings()
+        s["watch_folders"] = [f for f in s.get("watch_folders") or [] if f["path"] != req.folder]
+        save_settings(s)
     return {"ok": True}
 
 
@@ -539,9 +614,10 @@ class SettingsReq(BaseModel):
 @app.post("/api/settings")
 def update_settings(req: SettingsReq, request: Request):
     require_local(request)
-    s = load_settings()
-    s["delete_after_days"] = max(0, min(req.delete_after_days, 365))
-    save_settings(s)
+    with LOCK:
+        s = load_settings()
+        s["delete_after_days"] = max(0, min(req.delete_after_days, 365))
+        save_settings(s)
     return {"ok": True}
 
 

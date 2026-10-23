@@ -6,6 +6,7 @@ single face row, which is then matched against everyone seen before. No image or
 ever leaves the PC; only the two models are downloaded once (from OpenCV's model zoo).
 """
 import ctypes
+import hashlib
 import logging
 import os
 import threading
@@ -52,11 +53,31 @@ lock = threading.Lock()  # faces/persons changes: the analysis thread vs. rename
 
 # ---------- models (downloaded once, then loaded from models/) ----------
 
-def _model_ok(p) -> bool:
-    """A real ONNX file starts with protobuf field 1 (0x08); a Git LFS pointer is text."""
+MAX_MODEL = 200 << 20
+MODEL_SHA256 = {
+    DETECTOR: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    RECOGNIZER: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+}
+
+
+def _sha256(p) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _model_ok(p, name: str | None = None) -> bool:
+    """A real ONNX file starts with protobuf field 1 (0x08); a Git LFS pointer is text.
+    The checksum also rejects a tampered or half-written file."""
     try:
+        if p.stat().st_size <= 100_000:
+            return False
         with open(p, "rb") as f:
-            return p.stat().st_size > 100_000 and f.read(1) == b"\x08"
+            if f.read(1) != b"\x08":
+                return False
+        return _sha256(p) == MODEL_SHA256.get(name or p.name)
     except OSError:
         return False
 
@@ -74,12 +95,17 @@ def ensure_models() -> bool:
         log.info("Downloading face model %s (one time) from %s", name, url)
         tmp = p.with_suffix(".part")
         try:
+            total = 0
             with urllib.request.urlopen(url, timeout=60) as r, open(tmp, "wb") as f:
                 while chunk := r.read(1 << 20):
+                    total += len(chunk)
+                    if total > MAX_MODEL:
+                        raise RuntimeError("download is far too large")
                     f.write(chunk)
-            if not _model_ok(tmp):
-                raise RuntimeError("downloaded file isn't an ONNX model")
-            tmp.replace(p)
+            if not _model_ok(tmp, name):
+                got = _sha256(tmp) if tmp.exists() else "nothing"
+                raise RuntimeError(f"check failed (got {got[:12]}…)")
+            os.replace(tmp, p)
         except Exception as e:
             tmp.unlink(missing_ok=True)
             log.warning("Face models missing, People is paused: %s", e)

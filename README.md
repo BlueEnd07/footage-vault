@@ -60,6 +60,7 @@ and quota. The setup takes about 15 minutes once and is covered step by step.
 | [docs/pc-guide.md](docs/pc-guide.md) | Using the PC app: gallery, people, map, albums, Takeout, delete forever, settings |
 | [docs/how-it-works.md](docs/how-it-works.md) | How it works: YouTube as storage, dates, duplicate detection, safety checks, limits |
 | [docs/development.md](docs/development.md) | Building, testing and releasing both apps |
+| [docs/release.md](docs/release.md) | The Android release key, its SHA-1, and publishing a release |
 | [AGENTS.md](AGENTS.md) | Install instructions for AI coding agents |
 
 ## Good to know
@@ -79,6 +80,11 @@ android/          Android app (Kotlin, Jetpack Compose)
 vault/            PC app back end (Python, FastAPI, SQLite)
 web/              PC app front end (HTML/CSS/JS, no build step)
 docs/             Documentation
+tests/            PC tests (pytest; use a temp VAULT_DATA)
 install.ps1       One-command installer for the PC app
 start.bat         Starts the PC app in the system tray
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

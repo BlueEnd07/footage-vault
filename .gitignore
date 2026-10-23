@@ -12,5 +12,17 @@ __pycache__/
 # Face models (downloaded automatically on first run)
 models/
 
+# Android signing key + machine paths (back these up somewhere safe, never commit them)
+keystore.properties
+*.jks
+*.keystore
+android/local.properties
+
+# Build output
+build/
+android/.gradle/
+.gradle/
+
 # Built app files
 *.apk
+/dist/

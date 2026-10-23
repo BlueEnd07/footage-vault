@@ -28,9 +28,12 @@ Walk the user through it one step at a time, offering to open each page. Full wo
 5. **Keys** at https://console.cloud.google.com/auth/clients → Create client:
    - **PC app:** type **Desktop app** → Download JSON → save as `client_secret.json` in the repo folder
      (`install.ps1` picks up `client_secret_*.json` from Downloads by itself).
-   - **Android app:** type **Android**, package `com.footagevault.app`, SHA-1
-     `A0:47:5F:E8:32:05:AE:9A:F3:47:34:5A:AF:7A:69:86:E2:49:6B:EC` (the key the published APKs are signed with).
-     If you build and sign the APK yourself, use that key's SHA-1 instead.
+   - **Android app:** type **Android**, package `com.footagevault.app`. Add **both** SHA-1s so old and new
+     downloads can sign in (create a second Android client if the form only takes one):
+     - `49:AA:78:6F:93:FF:A7:98:DB:F5:B5:04:BF:E8:8D:A2:1D:45:A5:BE` — releases from Android 1.13.3 /
+       versionCode 23 onwards (the dedicated release key).
+     - `A0:47:5F:E8:32:05:AE:9A:F3:47:34:5A:AF:7A:69:86:E2:49:6B:EC` — older releases (signed with the debug key).
+     If the user builds and signs the APK themselves, use that key's SHA-1 instead (`docs/release.md`).
 
 Never ask the user to paste key contents into the chat, and never print `client_secret.json` or `data\token.json`.
 
@@ -79,7 +82,9 @@ Optional extras (ask first, one at a time; see `SETUP.md` §4–5):
 - **Don't delete anything for the user:** not videos, YouTube uploads or Syncthing folders. *Free up space* and
   *Delete forever* are for the user to press.
 - **Testing changes:** never on the real library. Use `VAULT_DATA=<temp folder>` and port 8799
-  (see `docs/development.md`).
+  (see `docs/development.md`). PC tests: `.venv\Scripts\python -m pytest -q`. Android tests:
+  `android\gradlew.bat :app:testDebugUnitTest` (set `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\short\tmp`
+  on Windows if Gradle can't open a loopback connection).
 - **Restarting the real PC app:** check `counts.uploading` in `/api/status` first.
 - **Publishing releases** (`gh release create`) is public and reaches every installed app. Only do it when the user
   asks.

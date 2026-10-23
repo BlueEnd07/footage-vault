@@ -1,4 +1,7 @@
+import json
+import os
 import re
+import tempfile
 import time
 
 from google.auth.exceptions import RefreshError
@@ -17,6 +20,31 @@ from .config import CLIENT_SECRET, TOKEN_PATH
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
 CHUNK = 16 * 1024 * 1024
 RETRYABLE_STATUS = {500, 502, 503, 504}
+QUOTA_REASONS = {
+    "quotaExceeded", "dailyLimitExceeded", "uploadLimitExceeded",
+    "rateLimitExceeded", "userRateLimitExceeded",
+}
+
+
+def _write_token(text: str) -> None:
+    """Write the OAuth token atomically, readable only by this user."""
+    fd, tmp = tempfile.mkstemp(prefix=".token-", suffix=".json", dir=TOKEN_PATH.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, TOKEN_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class QuotaExceeded(Exception):
@@ -55,7 +83,7 @@ def credentials() -> Credentials | None:
         except Exception:  # no internet right now; not a login problem
             _auth["state"] = "offline"
             return None
-        TOKEN_PATH.write_text(creds.to_json(), "utf-8")
+        _write_token(creds.to_json())
     _auth["state"] = "ok"
     return creds
 
@@ -95,7 +123,7 @@ def finish_login(redirect_uri: str, pasted: str) -> None:
     flow = _flow(redirect_uri, state)
     flow.code_verifier = verifier
     flow.fetch_token(code=code)
-    TOKEN_PATH.write_text(flow.credentials.to_json(), "utf-8")
+    _write_token(flow.credentials.to_json())
 
 
 def logout() -> None:
@@ -109,10 +137,24 @@ def _service():
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
+def _error_reasons(err: HttpError) -> tuple[set[str], str]:
+    raw = err.content
+    text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    try:
+        data = json.loads(text)
+        errors = (data.get("error") or {}).get("errors") or []
+        return {str(e.get("reason")) for e in errors if e.get("reason")}, text
+    except (ValueError, AttributeError, TypeError):
+        return set(), text
+
+
 def _is_quota(err: HttpError) -> bool:
-    text = str(err.content)
-    return err.resp.status in (403, 429) and (
-        "quotaExceeded" in text or "uploadLimitExceeded" in text or "rateLimitExceeded" in text)
+    """YouTube reports some limits as 400, some as 403/429, so match the reason."""
+    reasons, text = _error_reasons(err)
+    if reasons & QUOTA_REASONS:
+        return True
+    status = getattr(getattr(err, "resp", None), "status", None)
+    return status in (403, 429) and any(reason in text for reason in QUOTA_REASONS)
 
 
 def channel_title() -> str | None:
@@ -124,8 +166,39 @@ def channel_title() -> str | None:
         return None
 
 
-def upload(path: str, title: str, description: str, recorded_iso: str, on_progress) -> str:
-    """Resumable upload as a private video. Returns the YouTube video id."""
+def _probe_session(request, session: str, size: int):
+    """Ask YouTube how much of a resumable session it already has."""
+    resp, content = request.http.request(
+        session, method="PUT",
+        headers={"Content-Range": f"bytes */{size}", "content-length": "0"})
+    status = getattr(resp, "status", 0)
+    if status in (200, 201):
+        return "complete", None, request.postproc(resp, content)
+    if status == 308:
+        try:
+            offset = int(resp["range"].split("-")[1]) + 1
+        except (KeyError, ValueError, IndexError):
+            # Without a Range the server's offset is unknown; resuming at 0 would be
+            # rejected. Start a new session instead.
+            return "expired", None, None
+        if size and offset >= size:
+            # All bytes arrived but the final response was lost. Starting over is the
+            # only safe move; YouTube won't accept a zero-byte chunk.
+            return "expired", None, None
+        return "incomplete", offset, None
+    if status in (404, 410):
+        return "expired", None, None
+    raise HttpError(resp, content, uri=session)
+
+
+def upload(path: str, title: str, description: str, recorded_iso: str, on_progress,
+           session: str | None = None, offset: int = 0,
+           on_session=None, on_offset=None) -> str:
+    """Resumable upload as a private video. Returns the YouTube video id.
+
+    A session URI and offset can be passed back after a restart; the server is
+    probed first, which also recovers the video id if a final response was lost.
+    """
     body = {
         "snippet": {"title": title, "description": description, "categoryId": "22"},
         "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False},
@@ -133,14 +206,32 @@ def upload(path: str, title: str, description: str, recorded_iso: str, on_progre
     }
     media = MediaFileUpload(path, mimetype="application/octet-stream",
                             chunksize=CHUNK, resumable=True)
+    size = media.size() or 0
     request = _service().videos().insert(
         part="snippet,status,recordingDetails", body=body, media_body=media)
+
+    if session:
+        state, server_offset, finished = _probe_session(request, session, size)
+        if state == "complete" and finished:
+            on_progress(1.0)
+            return finished["id"]
+        if state == "expired":
+            session = None
+        else:
+            offset = server_offset if server_offset is not None else offset
+            request.resumable_uri = session
+            request.resumable_progress = max(0, min(int(offset), size))
 
     response, failures = None, 0
     while response is None:
         try:
             status, response = request.next_chunk()
             failures = 0
+            if on_session and request.resumable_uri and request.resumable_uri != session:
+                session = request.resumable_uri
+                on_session(session)
+            if on_offset:
+                on_offset(int(request.resumable_progress))
             if status:
                 on_progress(status.progress())
         except HttpError as e:
@@ -282,8 +373,8 @@ def video_states(ids: list[str]) -> dict[str, dict]:
     out = {}
     svc = _service()
     for i in range(0, len(ids), 50):
-        res = svc.videos().list(part="status,contentDetails",
-                                id=",".join(ids[i:i + 50])).execute()
+        res = _call(svc.videos().list(part="status,contentDetails",
+                                      id=",".join(ids[i:i + 50])))
         for item in res.get("items", []):
             st = item.get("status", {})
             out[item["id"]] = {

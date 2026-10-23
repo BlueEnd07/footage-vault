@@ -1,7 +1,6 @@
 package com.footagevault.app.ui
 
 import androidx.compose.animation.animateContentSize
-import android.Manifest
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,6 +61,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.footagevault.app.R
 import com.footagevault.app.data.MediaScanner
+import com.footagevault.app.data.Permissions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -240,12 +240,14 @@ private fun Radio(title: String, sub: String, selected: Boolean, onClick: () -> 
 fun Onboarding(vm: AppViewModel, onDone: () -> Unit) {
     val ctx = LocalContext.current
     val signedIn by vm.signedIn.collectAsState()
-    var granted by remember { mutableStateOf(false) }
-    var step by remember { mutableIntStateOf(0) }
-    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
-        granted = res[Manifest.permission.READ_MEDIA_VIDEO] == true
+    var granted by remember { mutableStateOf(Permissions.mediaGranted(ctx)) }
+    var denied by remember { mutableStateOf(false) }
+    var step by remember { mutableIntStateOf(if (granted) 1 else 0) }
+    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        granted = Permissions.mediaGranted(ctx)
+        denied = !granted
         vm.rescan()
-        step = 1
+        if (granted) step = 1
     }
     val existing = remember(granted) { if (granted) MediaScanner.countToBackUp(ctx, vm.prefs.folders, 0L) else 0 }
 
@@ -259,10 +261,15 @@ fun Onboarding(vm: AppViewModel, onDone: () -> Unit) {
         when {
             step == 0 -> {
                 Text("First, allow access to your videos.", textAlign = TextAlign.Center)
+                if (denied) {
+                    Text("Access is needed to find your videos. If Android doesn't ask again, allow it in Settings → Apps → Footage Vault → Permissions.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+                }
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = {
-                    perms.launch(arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.ACCESS_MEDIA_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
-                }, modifier = Modifier.fillMaxWidth()) { Text("Allow access") }
+                Button(onClick = { perms.launch(Permissions.request()) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (denied) "Try again" else "Allow access")
+                }
             }
             !signedIn -> {
                 Text("Now sign in with the Google account that owns your YouTube channel.", textAlign = TextAlign.Center)

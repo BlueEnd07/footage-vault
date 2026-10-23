@@ -15,9 +15,15 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 _SHORT_SIDE = "scale='if(gt(iw,ih),-2,min({n},iw))':'if(gt(iw,ih),min({n},ih),-2)'"
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", creationflags=_NO_WINDOW)
+def _run(cmd: list[str], timeout: float = 300) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", creationflags=_NO_WINDOW, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        err = e.stderr
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        return subprocess.CompletedProcess(cmd, 124, "", f"timed out after {timeout:g}s. {err or ''}".strip())
 
 
 def fingerprint(path: Path) -> str:
@@ -46,7 +52,7 @@ def _parse_time(value: str) -> datetime | None:
 
 def probe(path: Path) -> dict:
     r = _run(["ffprobe", "-v", "error", "-print_format", "json",
-              "-show_format", "-show_streams", str(path)])
+              "-show_format", "-show_streams", str(path)], timeout=60)
     if r.returncode:
         raise RuntimeError((r.stderr.strip() or "ffprobe failed")[:300])
     info = json.loads(r.stdout)
@@ -111,7 +117,7 @@ def place_name(lat: float, lon: float) -> str | None:
 def make_thumb(src: Path, dst: Path, duration: float) -> None:
     seek = f"{min(1.0, duration / 2):.2f}"
     r = _run(["ffmpeg", "-y", "-v", "error", "-ss", seek, "-i", str(src),
-              "-frames:v", "1", "-vf", _SHORT_SIDE.format(n=480), "-q:v", "4", str(dst)])
+              "-frames:v", "1", "-vf", _SHORT_SIDE.format(n=480), "-q:v", "4", str(dst)], timeout=120)
     if r.returncode or not dst.exists():
         raise RuntimeError("Thumbnail failed: " + r.stderr.strip()[-300:])
 
@@ -125,7 +131,7 @@ def make_preview(src: Path, dst: Path) -> None:
               "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
               "-c:a", "aac", "-b:a", "128k", "-map_metadata", "0",
               # keep tags such as GPS location in the preview, which outlives the original
-              "-movflags", "+faststart+use_metadata_tags", str(tmp)])
+              "-movflags", "+faststart+use_metadata_tags", str(tmp)], timeout=3600)
     if r.returncode or not tmp.exists():
         tmp.unlink(missing_ok=True)
         raise RuntimeError("Preview failed: " + r.stderr.strip()[-300:])

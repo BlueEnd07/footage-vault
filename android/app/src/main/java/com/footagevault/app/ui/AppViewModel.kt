@@ -484,7 +484,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         try {
             _updateProgress.value = 0f
             val apk = Updater.download(ctx, u) { _updateProgress.value = it }
-            Updater.install(ctx, apk)
+            Updater.install(ctx, apk, u)
         } catch (e: Exception) {
             say("Update download failed: ${e.message}")
         } finally {

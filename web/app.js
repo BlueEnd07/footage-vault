@@ -104,6 +104,13 @@ function dialog({ title, text = "", input = null, ok = "OK", cancel = "Cancel", 
 const ask = (title, value = "", placeholder = "", ok = "Save", text = "") => dialog({ title, text, input: { value, placeholder }, ok });
 const confirmBox = (title, text, ok = "OK", danger = false) => dialog({ title, text, ok, danger });
 const tell = (title, text = "") => dialog({ title, text, cancel: null });
+// Every button that calls the API reports a failure instead of failing silently.
+window.addEventListener("unhandledrejection", (e) => {
+  const reason = e.reason;
+  const msg = reason && reason.message ? reason.message : String(reason || "");
+  if (msg && !/abort/i.test(msg)) toast(msg);
+  e.preventDefault();
+});
 let toastTimer = null;
 function toast(msg, action) {
   const t = $("#toast");
@@ -281,8 +288,10 @@ $("#albumsView").addEventListener("click", (e) => {
 });
 
 function render() {
-  const key = [view, albumId, eventId, personId, filter, selecting, [...selected].join(), status.connected, status.user_paused,
-    JSON.stringify(videos), JSON.stringify(albums), JSON.stringify(events), JSON.stringify(people)].join("|");
+  // status.rev changes on every database write, so the (large) lists don't need stringifying here.
+  const key = [view, albumId, eventId, personId, filter, selecting, [...selected].join(),
+    status.rev, status.connected, status.user_paused,
+    JSON.stringify(peopleInfo.scan), peopleInfo.others].join("|");
   if (key === lastRendered) return;
   lastRendered = key;
   if (view === "photos") renderGallery();
@@ -346,6 +355,7 @@ function showMap() {
     map = L.map("map", { zoomControl: true, worldCopyJump: true }).setView([20.6, 78.9], 4);
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      referrerPolicy: "strict-origin-when-cross-origin",
     }).addTo(map);
   }
   setTimeout(() => map.invalidateSize(), 0);  // the map div was hidden until now
@@ -760,7 +770,9 @@ $("#peopleRow").addEventListener("click", (e) => {
 async function renderPersonFaces() {
   const box = $("#personFaces");
   if (!personId) { box.hidden = true; return; }
-  const list = await api(`/api/people/${personId}/faces`);
+  const pid = personId;
+  const list = await api(`/api/people/${pid}/faces`);
+  if (pid !== personId) return;  // the user opened someone else while this loaded
   box.hidden = list.length < 2;
   box.innerHTML = list.slice(0, 60).map((f) => `<div class="pf"><img src="/media/faces/${f.id}.jpg" alt="">
     <button data-notme="${f.id}" title="Not this person" aria-label="Not this person">${icon("close")}</button></div>`).join("");
@@ -847,7 +859,13 @@ function sendFile(file, remaining) {
       box.innerHTML = `<div>Sending ${esc(file.name)} to the PC${remaining > 1 ? ` · ${remaining - 1} more` : ""}</div>
         <div class="bar"><i style="width:${pct}%"></i></div><div class="small" style="opacity:.7">Keep this page open</div>`;
     };
-    xhr.onload = () => xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(xhr.responseText));
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* not JSON, e.g. a sign-in page */ }
+      if (xhr.status < 300 && data) return resolve(data);
+      if (xhr.status === 401) { reject(new Error("Not signed in")); return location.reload(); }
+      reject(new Error((data && data.detail) || xhr.statusText || `Upload failed (${xhr.status})`));
+    };
     xhr.onerror = () => reject(new Error("Network error"));
     xhr.send(file);
   });
@@ -938,7 +956,7 @@ $("#pasteForm").addEventListener("submit", async (e) => {
 let channelName = null;
 async function renderSettings() {
   $("#lanUrl").textContent = status.lan_url || "";
-  $("#pin").textContent = status.pin || "";
+  $("#pin").textContent = (await api("/api/pin").catch(() => ({}))).pin || "";
   $("#connectBtn").hidden = status.connected;
   $("#connectBtn").textContent = status.auth === "none" ? "Connect YouTube" : "Reconnect YouTube";
   $("#disconnectBtn").hidden = !status.connected;
@@ -1093,24 +1111,33 @@ function renderNotices() {
 }
 
 // ---------- polling ----------
+let refreshSeq = 0, refreshCtl = null;
 async function refresh() {
+  const seq = ++refreshSeq;
+  refreshCtl?.abort();              // never let an older, slower response overwrite newer data
+  const ctl = refreshCtl = new AbortController();
   try {
-    const [v, a, s, ev, pp] = await Promise.all([fetch("/api/videos"), fetch("/api/albums"), fetch("/api/status"),
-      fetch("/api/events"), fetch("/api/people")]);
+    const opts = { signal: ctl.signal };
+    const [v, a, s, ev, pp] = await Promise.all([
+      fetch("/api/videos", opts), fetch("/api/albums", opts), fetch("/api/status", opts),
+      fetch("/api/events", opts), fetch("/api/people", opts)]);
     if (v.status === 401) return location.reload();
-    videos = await v.json();
-    albums = await a.json();
-    events = await ev.json();
-    peopleInfo = await pp.json();
+    const [videosData, albumsData, statusData, eventsData, peopleData] =
+      await Promise.all([v.json(), a.json(), s.json(), ev.json(), pp.json()]);
+    if (seq !== refreshSeq) return;
+    videos = videosData;
+    albums = albumsData;
+    events = eventsData;
+    peopleInfo = peopleData;
     people = peopleInfo.people || [];
-    status = await s.json();
+    status = statusData;
     document.body.classList.toggle("remote", !status.local);
     render();
     renderPill();
     renderNotices();
     if (selecting) updateSelBar();
     if (!$("#settings").hidden) renderSettings();
-  } catch (e) { /* PC asleep or offline; try again next tick */ }
+  } catch (e) { /* PC asleep, offline, or superseded by a newer poll; try again next tick */ }
 }
 hydrateIcons();
 setView("photos");

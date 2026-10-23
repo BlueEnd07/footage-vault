@@ -105,6 +105,22 @@ def _video_files(root: Path):
         yield p
 
 
+def _file_ready(path: Path, wait: float = 2.0) -> bool:
+    """False while a file is still being written (fresh mtime that keeps changing)."""
+    try:
+        before = path.stat()
+    except OSError:
+        return False
+    if time.time() - before.st_mtime >= 10:
+        return True
+    time.sleep(wait)
+    try:
+        after = path.stat()
+    except OSError:
+        return False
+    return (before.st_size, before.st_mtime) == (after.st_size, after.st_mtime)
+
+
 def import_folder(folder: str) -> None:
     root = Path(folder)
     with _import_lock:
@@ -114,6 +130,9 @@ def import_folder(folder: str) -> None:
             for p in _video_files(root):
                 info["found"] += 1
                 try:
+                    if not _file_ready(p):
+                        info["skipped"] += 1
+                        continue
                     if register(p, "pc"):
                         info["added"] += 1
                     else:
@@ -249,6 +268,12 @@ def _scan_watch_folders() -> None:
                 _watch_ignored[key] = sig
         if added and wf.get("source", "phone") == "phone":
             notify.event("received_phone", added)
+    for key in list(_watch_seen):
+        if not Path(key).exists():
+            _watch_seen.pop(key, None)
+    for key in list(_watch_ignored):
+        if not Path(key).exists():
+            _watch_ignored.pop(key, None)
 
 
 def _watch_loop():
@@ -316,35 +341,49 @@ def _next_quota_reset() -> datetime:
     return tomorrow.astimezone().replace(tzinfo=None)
 
 
+def _pause_for_quota() -> None:
+    state["paused_until"] = _next_quota_reset()
+    state["pause_reason"] = "YouTube daily upload limit reached"
+    notify.alert_once("quota", "YouTube's daily upload limit was reached. "
+                      f"Uploads continue automatically at {state['paused_until']:%H:%M}.")
+
+
 def _upload_one(v: dict):
-    db.run("UPDATE videos SET status='uploading', progress=0, error=NULL WHERE id=?", (v["id"],))
+    db.run("UPDATE videos SET status='uploading', error=NULL WHERE id=?", (v["id"],))
     recorded = datetime.strptime(v["recorded_at"], "%Y-%m-%d %H:%M:%S")
     title = f"{recorded:%Y-%m-%d %H:%M} · {Path(v['name']).stem}"
     title = title.replace("<", "").replace(">", "")[:100]
-    last = [0.0]
+    last = [float(v.get("progress") or 0)]
 
     def progress(p):
         if p - last[0] >= 0.01:
             last[0] = p
             db.run("UPDATE videos SET progress=? WHERE id=?", (p, v["id"]))
 
+    def save_session(url):
+        db.run("UPDATE videos SET upload_url=? WHERE id=?", (url, v["id"]))
+
+    def save_offset(offset):
+        db.run("UPDATE videos SET upload_offset=? WHERE id=?", (offset, v["id"]))
+
     keep_awake(True)
     try:
         vid = youtube.upload(v["path"], title, f"Original file: {v['name']}",
-                             recorded.astimezone().isoformat(), progress)
-        db.run("UPDATE videos SET status='uploaded', youtube_id=?, progress=1 WHERE id=?",
-               (vid, v["id"]))
+                             recorded.astimezone().isoformat(), progress,
+                             session=v.get("upload_url"), offset=int(v.get("upload_offset") or 0),
+                             on_session=save_session, on_offset=save_offset)
+        db.run("""UPDATE videos SET status='uploaded', youtube_id=?, progress=1,
+                  upload_url=NULL, upload_offset=0 WHERE id=?""", (vid, v["id"]))
         notify.clear_alert("quota")
     except youtube.QuotaExceeded:
-        db.run("UPDATE videos SET status='queued', progress=0 WHERE id=?", (v["id"],))
-        state["paused_until"] = _next_quota_reset()
-        state["pause_reason"] = "YouTube daily upload limit reached"
-        notify.alert_once("quota", "YouTube's daily upload limit was reached. "
-                          f"Uploads continue automatically at {state['paused_until']:%H:%M}.")
+        # The session stays valid, so the upload picks up where it stopped after the reset.
+        db.run("UPDATE videos SET status='queued' WHERE id=?", (v["id"],))
+        _pause_for_quota()
     except Exception as e:
         attempts = v["attempts"] + 1
         status = "failed" if attempts >= 3 else "queued"
-        db.run("UPDATE videos SET status=?, attempts=?, progress=0, error=? WHERE id=?",
+        clear = ", upload_url=NULL, upload_offset=0" if status == "failed" else ""
+        db.run(f"UPDATE videos SET status=?, attempts=?, error=?{clear} WHERE id=?",
                (status, attempts, str(e)[:500], v["id"]))
         if status == "failed":
             notify.event("failed")
@@ -353,12 +392,13 @@ def _upload_one(v: dict):
         keep_awake(False)
 
 
-def _check_youtube():
+def _check_youtube(states: dict | None = None):
     """Moves uploaded videos forward once YouTube has processed them."""
     waiting = db.rows("SELECT id, youtube_id, source FROM videos WHERE status='uploaded'")
     if not waiting:
         return
-    states = youtube.video_states([w["youtube_id"] for w in waiting])
+    if states is None:
+        states = youtube.video_states([w["youtube_id"] for w in waiting])
     days = load_settings()["delete_after_days"]
     for w in waiting:
         s = states.get(w["youtube_id"])
@@ -377,11 +417,12 @@ def _check_youtube():
             notify.event("failed")
 
 
-def _safe_delete_due():
+def _safe_delete_due(states: dict | None = None):
     due = db.rows("SELECT * FROM videos WHERE status='on_youtube' AND delete_after <= ?", (db.now(),))
     if not due:
         return
-    states = youtube.video_states([d["youtube_id"] for d in due])
+    if states is None:
+        states = youtube.video_states([d["youtube_id"] for d in due])
     for v in due:
         hold = None
         s = states.get(v["youtube_id"])
@@ -426,13 +467,25 @@ def free_space() -> dict:
         ok = s and s["upload_status"] == "processed" and \
             abs(s["duration"] - (v["duration"] or 0)) <= max(2.0, (v["duration"] or 0) * 0.01)
         sync = Path(v["sync_path"])
-        if not ok or sync.stat().st_size != v["size"]:
+        try:
+            same_size = sync.stat().st_size == v["size"]
+        except OSError:
+            same_size = False
+        if not ok or not same_size:
             kept.append(v["name"])
             continue
-        send2trash(str(sync))
+        try:
+            send2trash(str(sync))
+        except Exception as e:
+            log.warning("Could not delete %s: %s", sync, e)
+            kept.append(v["name"])
+            continue
         own = Path(v["path"])
-        if own.exists():
-            send2trash(str(own))
+        try:
+            if own.exists():
+                send2trash(str(own))
+        except Exception as e:  # the phone copy is already gone; keep going
+            log.warning("Could not delete %s: %s", own, e)
         db.run("""UPDATE videos SET status='done', deleted_at=COALESCE(deleted_at, ?), phone_cleared_at=?
                   WHERE id=?""", (db.now(), db.now(), v["id"]))
         freed += 1
@@ -465,13 +518,25 @@ def delete_forever(ids: list[int], delete_copies: bool) -> dict:
         if delete_copies:
             for p in (v["path"], v["sync_path"]):
                 if p and Path(p).exists():
-                    send2trash(p)
+                    try:
+                        send2trash(p)
+                    except Exception as e:  # the YouTube copy is already gone; report the copy
+                        skipped.append(f"{v['name']} (copy left on disk: {e})")
         elif v["path"] and INCOMING in Path(v["path"]).parents and Path(v["path"]).exists():
             # The vault's own working copy is never the user's original.
-            send2trash(v["path"])
-        (THUMBS / f"{vid}.jpg").unlink(missing_ok=True)
-        (PREVIEWS / f"{vid}.mp4").unlink(missing_ok=True)
-        faces.forget_video(vid)
+            try:
+                send2trash(v["path"])
+            except Exception as e:
+                log.warning("Could not delete %s: %s", v["path"], e)
+        for p in (THUMBS / f"{vid}.jpg", PREVIEWS / f"{vid}.mp4"):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError as e:
+                log.warning("Could not delete %s: %s", p, e)
+        try:
+            faces.forget_video(vid)
+        except Exception:
+            log.exception("Could not forget faces for video %s", vid)
         db.run("INSERT OR REPLACE INTO tombstones (fingerprint, name, deleted_at) VALUES (?,?,?)",
                (v["fingerprint"], v["name"], db.now()))
         db.run("DELETE FROM album_videos WHERE video_id=?", (vid,))  # YouTube drops playlist items itself
@@ -551,15 +616,29 @@ def _yt_time(value: str | None) -> str:
         return db.now()
 
 
+_MAX_THUMB = 20 * 1024 * 1024
+
+
 def _download_thumb(url: str | None, vid: int) -> None:
     if not url:
         return
+    tmp = THUMBS / f"{vid}.part"
     try:
         import urllib.request
-        tmp = THUMBS / f"{vid}.part"
-        urllib.request.urlretrieve(url, tmp)
-        tmp.replace(THUMBS / f"{vid}.jpg")
+        req = urllib.request.Request(url, headers={"User-Agent": "FootageVault/1.0"})
+        total = 0
+        with urllib.request.urlopen(req, timeout=15) as r, open(tmp, "wb") as f:
+            while True:
+                chunk = r.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_THUMB:
+                    raise ValueError("thumbnail is too large")
+                f.write(chunk)
+        os.replace(tmp, THUMBS / f"{vid}.jpg")
     except Exception as e:
+        tmp.unlink(missing_ok=True)
         log.warning("Thumbnail download failed for %s: %s", vid, e)
 
 
@@ -668,8 +747,19 @@ def _youtube_loop():
             notify.clear_alert("login")
             if time.time() - last_check > 60:
                 last_check = time.time()
-                _check_youtube()
-                _safe_delete_due()
+                try:
+                    ids = [r["youtube_id"] for r in db.rows(
+                        """SELECT youtube_id FROM videos
+                           WHERE youtube_id IS NOT NULL AND status='uploaded'
+                           UNION
+                           SELECT youtube_id FROM videos
+                           WHERE youtube_id IS NOT NULL AND status='on_youtube' AND delete_after <= ?""",
+                        (db.now(),))]
+                    states = youtube.video_states(ids) if ids else {}
+                    _check_youtube(states)
+                    _safe_delete_due(states)
+                except youtube.QuotaExceeded:
+                    _pause_for_quota()
             if state["yt_import_now"] or time.time() - last_import > 1800:
                 state["yt_import_now"] = False
                 last_import = time.time()
@@ -700,8 +790,8 @@ def _youtube_loop():
 
 def start():
     db.init()
-    # An upload interrupted by closing the app starts again from the beginning.
-    db.run("UPDATE videos SET status='queued', progress=0 WHERE status='uploading'")
+    # An upload interrupted by closing the app resumes from its saved session.
+    db.run("UPDATE videos SET status='queued' WHERE status='uploading'")
     notify.start()
     threading.Thread(target=_backfill_locations, daemon=True, name="geo_backfill").start()
     faces.start()

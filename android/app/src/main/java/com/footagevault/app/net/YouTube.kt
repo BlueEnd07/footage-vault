@@ -194,15 +194,27 @@ class YouTube(private val token: suspend () -> String) {
         }
     }
 
-    /** Bytes YouTube already has for this session, or null if the session expired. */
-    suspend fun uploadedBytes(session: String, size: Long): Long? = withContext(Dispatchers.IO) {
+    sealed class UploadState {
+        /** YouTube has [offset] bytes; send the rest. */
+        data class Resume(val offset: Long) : UploadState()
+        /** The upload already finished (e.g. the last response was lost). */
+        data class Complete(val video: JSONObject) : UploadState()
+        /** The session is gone; start a new one. */
+        object Expired : UploadState()
+    }
+
+    /** Asks YouTube how far a session got, without sending any file data. */
+    suspend fun probeUpload(session: String, size: Long): UploadState = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(session).put(ByteArray(0).toRequestBody(null))
             .header("Authorization", "Bearer ${token()}").header("Content-Range", "bytes */$size").build()
         http.newCall(req).execute().use { r ->
             when (r.code) {
-                308 -> r.header("Range")?.substringAfterLast("-")?.toLongOrNull()?.plus(1) ?: 0L
-                200, 201 -> size
-                else -> null
+                308 -> r.header("Range")?.substringAfterLast("-")?.toLongOrNull()
+                    ?.let { if (it + 1 >= size) UploadState.Expired else UploadState.Resume(it + 1) }
+                    ?: UploadState.Expired
+                200, 201 -> UploadState.Complete(JSONObject(r.body?.string().orEmpty()))
+                404, 410 -> UploadState.Expired
+                else -> throw ApiException(r.code, r.body?.string().orEmpty())
             }
         }
     }
@@ -214,9 +226,14 @@ class YouTube(private val token: suspend () -> String) {
                            onProgress: (Long) -> Unit): JSONObject = withContext(Dispatchers.IO) {
         val chunk = 8L * 1024 * 1024
         var pos = start
+        if (pos >= size && size > 0) throw IOException("Upload is already complete; checking it again")
         cr.openInputStream(uri)?.use { input ->
             var skipped = 0L
-            while (skipped < pos) { val s = input.skip(pos - skipped); if (s <= 0) break; skipped += s }
+            while (skipped < pos) {
+                val s = input.skip(pos - skipped)
+                if (s <= 0) throw IOException("Can't resume: the file changed")
+                skipped += s
+            }
             val buf = ByteArray(chunk.toInt())
             while (true) {
                 val n = readFully(input, buf)
@@ -234,7 +251,8 @@ class YouTube(private val token: suspend () -> String) {
                     when (r.code) {
                         200, 201 -> return@withContext JSONObject(r.body?.string().orEmpty())
                         308 -> {
-                            val got = r.header("Range")?.substringAfterLast("-")?.toLongOrNull()?.plus(1) ?: (end + 1)
+                            val got = r.header("Range")?.substringAfterLast("-")?.toLongOrNull()?.plus(1)
+                                ?: throw IOException("Upload out of sync; will resume")
                             if (got != end + 1) throw IOException("Upload out of sync; will resume")
                             pos = got
                             onProgress(pos)

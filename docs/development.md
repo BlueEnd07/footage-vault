@@ -3,7 +3,7 @@
 ## Repository
 
 ```
-android/                      Android app (Kotlin 2.1, Jetpack Compose, Material 3; minSdk 30, targetSdk 35)
+android/                      Android app (Kotlin 2.3, Jetpack Compose, Material 3; minSdk 30, targetSdk 35)
   app/src/main/java/com/footagevault/app/
     MainActivity.kt           navigation, top/bottom bars, selection, system prompts
     YouTubePlayerActivity.kt  full-screen YouTube IFrame player with swipe between videos
@@ -43,9 +43,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -NoStart   # .venv, package
 - **Database:** `vault/db.py` holds `SCHEMA` plus additive migrations in `init()`. Only add tables or columns:
   users' databases are upgraded in place.
 - **Restarting a running app:** check `GET /api/status` → `counts.uploading` first. A PC upload interrupted
-  mid-way starts again from 0.
+  mid-way resumes from its saved YouTube session; if the session expired it starts again.
 - **Front end:** plain JS, no build step. Icons are inline SVG paths in `web/icons.js`. Check the syntax with
-  `node -e "new Function(require('fs').readFileSync('web/app.js','utf8'))"`.
+  `node --check web/app.js` and `node --check web/sw.js`.
+- **Tests:** `python -m pip install -r requirements-dev.txt`, then `.venv\Scripts\python -m pytest -q`. Tests set
+  their own `VAULT_DATA` to a temp folder, so they never touch the real library.
 
 ## Android app
 
@@ -59,33 +61,34 @@ cd android
 
 - **Windows gotcha:** if Gradle fails with *"Unable to establish loopback connection"*, the temp folder path is too
   long for Java's Unix-domain sockets. Set `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\short\tmp`.
+- **Tests:** `.\gradlew.bat :app:testDebugUnitTest` (JUnit + MockWebServer; no phone needed).
 - **Signing and Google sign-in:**
-  - The release build is signed with the debug keystore (`~/.android/debug.keystore`), and its **SHA-1** must be
-    registered as the Android OAuth client in the Google Cloud project.
-  - If you sign with another key, register that key's SHA-1 instead. `keytool -list -v -keystore <file>` prints it.
-  - Losing the keystore means future builds can't update installed copies or sign in until a new SHA-1 is
-    registered and the app is reinstalled.
-- The release build uses R8 (`isMinifyEnabled`), which shrinks the APK from about 66 MB to about 5 MB. Keep rules
+  - Release builds are signed with the dedicated key in `android/footage-vault-release.jks`, configured by
+    `android/keystore.properties`. Both are git-ignored: back them up, or future updates can't be installed.
+  - The key's **SHA-1** must be registered on the Android OAuth client in Google Cloud. See `docs/release.md`.
+  - Without those two files the build falls back to the debug key, which is only for development.
+- The release build uses R8 (`isMinifyEnabled`) to strip unused code; the current APK is about 30 MB. Keep rules
   are in `app/proguard-rules.pro`.
 - **No client secret** is in the app: Google Identity Services recognises the app by package name + SHA-1.
 
 ## Releasing the Android app
 
 The app updates itself from this repo's GitHub Releases. `net/Updater.kt` looks for the release whose tag is
-`android-v<versionCode>` with the highest number, and an attached `.apk`.
+`android-v<versionCode>` with the highest number, and an attached `.apk`. It refuses an update unless the APK's
+SHA-256 matches the release asset's digest, the package name matches, and it is signed with the installed key.
 
 1. Bump `versionCode` (+1) and `versionName` in `android/app/build.gradle.kts`.
-2. Build: `.\gradlew.bat assembleRelease`, and copy the APK to `FootageVault.apk`.
-3. Commit and push.
-4. Publish:
+2. Commit and push.
+3. Build, verify and publish:
    ```powershell
-   gh release create android-v<versionCode> FootageVault.apk --title "Footage Vault for Android <versionName>" --notes-file notes.md
+   powershell -ExecutionPolicy Bypass -File scripts\release-android.ps1 -Publish
    ```
-5. Check: `https://api.github.com/repos/<owner>/<repo>/releases` lists the new tag (it can lag a minute), and the
+   Without `-Publish` it only builds and checks the signature/checksum into `dist\`.
+4. Check: `https://api.github.com/repos/<owner>/<repo>/releases` lists the new tag (it can lag a minute), and the
    downloaded asset matches the build.
 
 Installed apps show **Update available** the next time they open. APK files are git-ignored. They're only
-distributed through Releases.
+distributed through Releases. See `docs/release.md` for the one-time key setup.
 
 ## Conventions
 
