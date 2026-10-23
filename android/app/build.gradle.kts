@@ -12,8 +12,10 @@ android {
         applicationId = "com.footagevault.app"
         minSdk = 30          // Android 11+: one-tap system delete (MediaStore.createDeleteRequest)
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.10.2"
+        versionCode = 16
+        versionName = "1.11"
+        // Telegram's engine (TDLib) is native code: only the 64-bit ARM build that phones use, to keep the app small.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     buildTypes {
@@ -30,7 +32,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
@@ -54,6 +55,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Telegram (photos and short videos): TDLib, Telegram's own client library, with a Kotlin coroutine API.
+    implementation("dev.g000sha256:tdl-coroutines-android:13.0.0")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-video:2.7.0")
@@ -61,3 +64,5 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.5.1")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
 }
+
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

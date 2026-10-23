@@ -96,7 +96,7 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
         val byName = mutableMapOf<String, MutableList<VideoInfo>>()
         for (v in infos) for (n in sourceNames(v)) byName.getOrPut(n) { mutableListOf() } += v
         val taken = db.items("yt_id IS NOT NULL").mapNotNull { it.ytId }.toMutableSet()
-        for (it in db.items("yt_id IS NULL AND on_phone=1")) {
+        for (it in db.items("yt_id IS NULL AND on_phone=1 AND kind='video' AND (store IS NULL OR store='youtube')")) {
             val m = byName[stem(it.name)]?.firstOrNull { v -> v.id !in taken && sameLength(v.durationS, it.durationMs) } ?: continue
             taken += m.id
             // A YouTube-only row for the same video is replaced by the phone row.

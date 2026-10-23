@@ -113,6 +113,7 @@ object Importer {
         db.insert(cv(
             "uri" to Uri.fromFile(file).toString(), "name" to src.name, "size" to file.length(), "duration_ms" to durationMs,
             "width" to w, "height" to h, "recorded" to recorded, "bucket" to BUCKET, "status" to status,
+            "store" to Router.store(Prefs(ctx), "video", durationMs, file.length()),
             "lat" to lat, "lon" to lon, "geo_checked" to false, "pending_album" to album?.trim()?.ifBlank { null },
         ))
         return Result.ADDED

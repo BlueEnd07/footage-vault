@@ -21,6 +21,8 @@ import com.footagevault.app.data.MediaScanner
 import com.footagevault.app.data.Prefs
 import com.footagevault.app.net.ApiException
 import com.footagevault.app.net.Auth
+import com.footagevault.app.net.Telegram
+import com.footagevault.app.net.TelegramException
 import com.footagevault.app.net.YouTube
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -45,7 +47,11 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         if (!ImportService.running) Importer.recover(applicationContext)
         runCatching { MediaScanner.scan(applicationContext) }
         runCatching { MediaScanner.fillLocations(applicationContext) }
-        if (!prefs.signedIn) return Result.success()
+        // Photos and short videos: Telegram, independent of YouTube (and of its daily limit).
+        try { telegramUploads() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
+            if (!isStopped) problem = "Telegram: ${e.message ?: e.javaClass.simpleName}"
+        }
+        if (!prefs.signedIn) { prefs.lastError = problem; return Result.success() }
         val token = Auth.silentToken(applicationContext)
         if (token == null) {
             prefs.lastError = "Google sign-in has expired. Open Settings, tap Sign out, then Sign in again."
@@ -89,8 +95,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     private suspend fun uploadLoop(sync: Sync, yt: YouTube, refreshToken: suspend () -> Unit) {
         while (!isStopped) {
-            val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3", order = "recorded ASC").firstOrNull() ?: return
-            val left = db.items("status IN ('queued','uploading') AND on_phone=1").size
+            val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND $YOUTUBE", order = "recorded ASC").firstOrNull() ?: return
+            val left = db.items("status IN ('queued','uploading') AND on_phone=1 AND $YOUTUBE").size
             val title = "Backing up · $left left"
             val shown = tryForeground(title, it.name)
             db.update(it.id, "status" to "uploading", "error" to null)
@@ -134,6 +140,52 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         }
     }
 
+    private suspend fun telegramUploads() {
+        if (prefs.userPaused || ImportService.running) return
+        if (db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND store='telegram'").isEmpty()) return
+        if (!Telegram.ready(applicationContext)) {
+            problem = "Photos and short videos wait for Telegram. Open Settings → Telegram to sign in."
+            return
+        }
+        if (!tgUploading.tryLock()) return
+        try { telegramLoop() } finally { tgUploading.unlock() }
+    }
+
+    private suspend fun telegramLoop() {
+        while (!isStopped) {
+            val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND store='telegram'", order = "recorded ASC")
+                .firstOrNull() ?: return
+            val left = db.items("status IN ('queued','uploading') AND on_phone=1 AND store='telegram'").size
+            val title = "Backing up to Telegram · $left left"
+            val shown = tryForeground(title, it.name)
+            db.update(it.id, "status" to "uploading", "error" to null, "progress" to 0f)
+            try {
+                var lastPct = -1
+                val sent = Telegram.upload(applicationContext, it) { bytes ->
+                    val pct = if (it.size > 0) (bytes * 100 / it.size).toInt().coerceIn(0, 100) else 0
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        db.update(it.id, "progress" to pct / 100f)
+                        if (shown) setForegroundAsync(foreground(title, "${it.name} · $pct%", pct))
+                    }
+                }
+                db.update(it.id, "status" to "backed_up", "tg_msg" to sent.messageId, "thumb" to sent.thumb, "progress" to 1f)
+            } catch (e: TelegramException) {
+                if (e.isFlood) {  // Telegram asks to slow down: try again on the next run
+                    db.update(it.id, "status" to "queued")
+                    problem = "Telegram asked to slow down. It continues by itself shortly."
+                    return
+                }
+                fail(it.id, it.attempts, "Telegram: ${e.message}")
+            } catch (e: java.io.FileNotFoundException) {
+                db.update(it.id, "status" to "failed", "error" to "The file is no longer on the phone")
+            } catch (e: Exception) {
+                db.update(it.id, "status" to "queued", "error" to if (isStopped) null else (e.message ?: "Network problem"))
+                throw e
+            }
+        }
+    }
+
     /**
      * Shows the "Backing up" notification so a long upload may keep going. Android refuses that while the app is in
      * the background (Android 12+); then the upload runs anyway, as a normal background job. If Android stops the job
@@ -167,6 +219,9 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         private const val PERIODIC = "backup-periodic"
         private const val NOW = "backup-now"
         private val uploading = Mutex()
+        private val tgUploading = Mutex()
+        /** Rows that go to YouTube (older rows have no store yet). */
+        private const val YOUTUBE = "(store IS NULL OR store='youtube')"
 
         private fun constraints(prefs: Prefs) = Constraints.Builder()
             .setRequiredNetworkType(if (prefs.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)

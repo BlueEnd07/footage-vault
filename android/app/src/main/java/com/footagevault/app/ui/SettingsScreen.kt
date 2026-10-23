@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Folder
@@ -115,6 +116,8 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                     }
                     Row(Modifier.padding(top = 8.dp)) { Button(onClick = vm::backUpNow) { Text("Back up now") } }
                 }
+
+                Card(Icons.AutoMirrored.Outlined.Send, "Telegram · photos and short videos") { TelegramCard(vm) }
 
                 Card(Icons.Outlined.PhotoLibrary, "Back up from Google Photos") {
                     Text("In Google Photos, open an album, select the videos, tap Share and choose Footage Vault. " +

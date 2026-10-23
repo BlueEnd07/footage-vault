@@ -57,6 +57,23 @@ class Prefs(ctx: Context) {
         get() = p.getString("last_error", null)
         set(v) = p.edit { putString("last_error", v) }
 
+    // ---------- Telegram (photos and short videos) ----------
+    /** From my.telegram.org; 0 / null = Telegram not set up. Stored only on this phone. */
+    var tgApiId: Int
+        get() = p.getInt("tg_api_id", 0)
+        set(v) = p.edit { putInt("tg_api_id", v) }
+    var tgApiHash: String?
+        get() = p.getString("tg_api_hash", null)
+        set(v) = p.edit { putString("tg_api_hash", v) }
+    /** The private "Footage Vault" channel; 0 = not set up yet. */
+    var tgChatId: Long
+        get() = p.getLong("tg_chat_id", 0L)
+        set(v) = p.edit { putLong("tg_chat_id", v) }
+    /** Videos up to this long go to Telegram (original file); 0 = all videos go to YouTube. */
+    var tgShortMinutes: Int
+        get() = p.getInt("tg_short_minutes", 3)
+        set(v) = p.edit { putInt("tg_short_minutes", v) }
+
     var lastPull: Long
         get() = p.getLong("last_pull", 0L)
         set(v) = p.edit { putLong("last_pull", v) }

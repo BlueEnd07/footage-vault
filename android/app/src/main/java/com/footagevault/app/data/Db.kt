@@ -51,17 +51,27 @@ data class Item(
     val dateSynced: Boolean = true,
     /** Album to put it in once it's on YouTube (videos shared in from Google Photos). */
     val pendingAlbum: String? = null,
+    /** "video" | "photo" */
+    val kind: String = "video",
+    /** Where it's backed up: "youtube" | "telegram" (null = not decided yet, older rows = YouTube). */
+    val store: String? = null,
+    /** Message in the Telegram channel. */
+    val tgMsg: Long? = null,
+    /** Preview kept by the app (Telegram items), shown once the phone copy is gone. */
+    val thumb: String? = null,
 ) {
+    val isPhoto get() = kind == "photo"
+    val onTelegram get() = store == "telegram"
     /** A copy shared in from another app (Google Photos), kept in the app's own storage until it's backed up. */
     val isImport get() = uri?.startsWith("file:") == true
     val isBackedUp get() = status == "backed_up" || status == "youtube"
     val isPending get() = status == "copied" || status == "queued" || status == "uploading" || status == "processing"
     val thumbModel: Any?
         get() = if (onPhone && uri != null) android.net.Uri.parse(uri)
-        else ytId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
+        else thumb?.let { java.io.File(it) } ?: ytId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 3) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 4) {
 
     private val _version = MutableStateFlow(0L)
     /** Bumps on every write so the UI can reload. */
@@ -94,7 +104,11 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
                 geo_checked INTEGER NOT NULL DEFAULT 0,
                 manual_date INTEGER NOT NULL DEFAULT 0,
                 date_synced INTEGER NOT NULL DEFAULT 1,
-                pending_album TEXT
+                pending_album TEXT,
+                kind TEXT NOT NULL DEFAULT 'video',
+                store TEXT,
+                tg_msg INTEGER,
+                thumb TEXT
             )"""
         )
         db.execSQL("CREATE INDEX idx_items_status ON items(status)")
@@ -113,6 +127,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
             db.execSQL("ALTER TABLE items ADD COLUMN date_synced INTEGER NOT NULL DEFAULT 1")
         }
         if (oldVersion < 3) db.execSQL("ALTER TABLE items ADD COLUMN pending_album TEXT")  // 1.9: Google Photos imports
+        if (oldVersion < 4) {  // 1.11: photos and short videos on Telegram
+            db.execSQL("ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'video'")
+            db.execSQL("ALTER TABLE items ADD COLUMN store TEXT")
+            db.execSQL("ALTER TABLE items ADD COLUMN tg_msg INTEGER")
+            db.execSQL("ALTER TABLE items ADD COLUMN thumb TEXT")
+        }
     }
 
     fun bump() { _version.value = _version.value + 1 }
@@ -145,6 +165,10 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
         manualDate = getInt(getColumnIndexOrThrow("manual_date")) == 1,
         dateSynced = getInt(getColumnIndexOrThrow("date_synced")) == 1,
         pendingAlbum = getStringOrNull("pending_album"),
+        kind = getString(getColumnIndexOrThrow("kind")),
+        store = getStringOrNull("store"),
+        tgMsg = getLongOrNull("tg_msg"),
+        thumb = getStringOrNull("thumb"),
     )
 
     private fun Cursor.getStringOrNull(c: String) = getColumnIndexOrThrow(c).let { if (isNull(it)) null else getString(it) }

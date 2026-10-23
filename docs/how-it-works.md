@@ -58,6 +58,23 @@ and, once online, the app rewrites the video's `fv:` `r` and `recordingDate` on 
 Other phones pick it up on their next pull; the PC app applies a description's `fv:` `r` to its own copy of the
 video too. Videos whose folder or file name contains "gif" are not listed or uploaded by the Android app.
 
+## Telegram (Android)
+
+Photos (always) and videos up to the chosen length (`Prefs.tgShortMinutes`, default 3) are routed to Telegram by
+`data/Router.kt` (column `store` = `telegram` / `youtube`; queued items are re-routed when the setting changes).
+`net/Telegram.kt` runs TDLib (Telegram's client library, via `dev.g000sha256:tdl-coroutines-android`) with the
+user's own API ID / hash, signs in with phone + code (+ 2FA password), and finds or creates a private channel titled
+*Footage Vault* that the account owns (`Prefs.tgChatId`).
+
+Each item is sent as a document (`InputMessageDocument`, content-type detection off, so the file is kept as is)
+with a 320 px JPEG preview. The caption mirrors a YouTube description: a date + name line, `Original file: NAME`,
+and `fv:{"n","r","s","k","d","w","h","lat","lon"}` (`k` = `photo` / `video`). The message id goes to `tg_msg`, and
+the preview is kept in `files/thumbs/` (`thumb`) for the gallery. TDLib's message database is off, so a send that
+Android interrupts isn't re-sent later; the half-sent message is deleted and the item retried.
+
+Photos are scanned from MediaStore only when Telegram is set up and photo access (`READ_MEDIA_IMAGES`) is granted.
+Uploads to Telegram run before the YouTube queue in the same backup run, with their own lock.
+
 ## Google Photos imports (Android)
 
 `ImportActivity` takes `SEND` / `SEND_MULTIPLE` shares (and Settings → Choose videos). It hands the URIs, with the

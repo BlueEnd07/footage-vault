@@ -10,8 +10,10 @@ import com.footagevault.app.data.Db
 import com.footagevault.app.data.Item
 import com.footagevault.app.data.MediaScanner
 import com.footagevault.app.data.Prefs
+import com.footagevault.app.data.Router
 import com.footagevault.app.net.ApiException
 import com.footagevault.app.net.Auth
+import com.footagevault.app.net.Telegram
 import com.footagevault.app.net.Updater
 import com.footagevault.app.net.YouTube
 import com.footagevault.app.work.BackupWorker
@@ -57,6 +59,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val sync = Sync(ctx, yt)
 
     init {
+        viewModelScope.launch(Dispatchers.IO) { Telegram.start(ctx) }
         @OptIn(FlowPreview::class)
         viewModelScope.launch { db.version.debounce(150).collect { reload() } }
         viewModelScope.launch { reload() }
@@ -114,10 +117,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val unmetered = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
         val charging = ctx.getSystemService(android.os.BatteryManager::class.java).isCharging
         val err = prefs.lastError
+        val tgWaiting = pending.any { it.onTelegram && it.status == "queued" }
+        val tgReady = (Telegram.state.value as? Telegram.State.Ready)?.channel == true
         val resume = java.time.format.DateTimeFormatter.ofPattern("EEE h:mm a")
             .format(java.time.Instant.ofEpochMilli(prefs.pausedUntil).atZone(java.time.ZoneId.systemDefault()))
         return when {
-            !prefs.signedIn -> "Not signed in" to "Sign in to YouTube (Settings) to start uploading."
+            tgWaiting && !tgReady && pending.none { !it.onTelegram } -> "Waiting for Telegram" to
+                "Photos and short videos go to Telegram. Open Settings → Telegram to sign in."
+            !prefs.signedIn && pending.any { !it.onTelegram } -> "Not signed in" to "Sign in to YouTube (Settings) to start uploading."
             prefs.userPaused -> "Backup is paused" to "Turn off Pause backup in Settings."
             System.currentTimeMillis() < prefs.pausedUntil -> "YouTube's daily limit is reached" to
                 "YouTube only allows a few uploads a day for your Google project. They continue by themselves after $resume."
@@ -225,7 +232,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteAlbum(pid: String) = io { yt.deletePlaylist(pid); db.removeAlbum(pid); say("Album deleted") }
 
     // ---------- free up space ----------
-    fun freeCandidates() = items.value.filter { it.onPhone && it.status == "backed_up" && it.uri != null }
+    // Telegram copies can't be opened from the app yet (1.12), so those stay on the phone for now.
+    fun freeCandidates() = items.value.filter { it.onPhone && it.status == "backed_up" && it.uri != null && !it.onTelegram }
 
     /** Re-checks each video on YouTube, then asks Android to delete them (one system prompt). */
     fun freeUpSpace(list: List<Item> = freeCandidates()) = io {
@@ -286,6 +294,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * a YouTube-only entry disappears.
      */
     private fun forgetYouTubeCopy(item: Item) {
+        if (item.onTelegram && item.tgMsg != null) return  // still on Telegram
         if (item.onPhone) db.update(item.id, "yt_id" to null, "status" to "excluded", "privacy" to null, "upload_url" to null)
         else db.delete(item.id)
     }
@@ -299,14 +308,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 try { yt.deleteVideo(id) } catch (e: ApiException) { if (!e.isNotFound) throw e }  // already gone is fine
                 gone++
             }
-            forgetYouTubeCopy(it)
+            it.tgMsg?.let { msg -> Telegram.delete(ctx, msg); db.update(it.id, "tg_msg" to null); gone++ }
+            forgetYouTubeCopy(db.item(it.id) ?: it)
         }
         val onPhone = list.filter { it.onPhone && it.uri != null }
         if (onPhone.isNotEmpty()) {
             // Fresh rows: they no longer have a YouTube id, so the phone delete removes them completely.
             requestPhoneDelete(onPhone.mapNotNull { db.item(it.id) })
         }
-        if (gone > 0) say("Deleted $gone from YouTube" + if (onPhone.isNotEmpty()) "; confirm to delete from the phone too" else "")
+        val where = if (list.any { it.onTelegram }) if (list.any { it.ytId != null }) "YouTube and Telegram" else "Telegram" else "YouTube"
+        if (gone > 0) say("Deleted $gone from $where" + if (onPhone.isNotEmpty()) "; confirm to delete from the phone too" else "")
     }
 
     // ---------- duplicates ----------
@@ -377,4 +388,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- settings ----------
     fun settingsChanged() { BackupWorker.schedule(ctx, replace = true); rescan() }
+
+    // ---------- Telegram (photos and short videos) ----------
+    val telegram = Telegram.state
+    private val _tgBusy = MutableStateFlow(false)
+    val tgBusy = _tgBusy.asStateFlow()
+    private fun tg(block: suspend () -> String?) = viewModelScope.launch(Dispatchers.IO) {
+        _tgBusy.value = true
+        try { block()?.let(::say) } catch (e: Exception) { say(e.message ?: "Telegram didn't respond") } finally { _tgBusy.value = false }
+    }
+    fun tgKeys(apiId: String, apiHash: String) = tg {
+        val id = apiId.trim().toIntOrNull() ?: return@tg "The API ID is a number"
+        if (apiHash.trim().length < 20) return@tg "The API hash is the long code under it"
+        Telegram.setKeys(ctx, id, apiHash); null
+    }
+    fun tgPhone(phone: String) = tg { Telegram.sendPhone(ctx, phone) }
+    fun tgCode(code: String) = tg { Telegram.sendCode(ctx, code) }
+    fun tgPassword(pw: String) = tg { Telegram.sendPassword(ctx, pw) }
+    fun tgDisconnect() = tg { Telegram.disconnect(ctx); Router.reroute(db, prefs); "Telegram disconnected. Its channel and files stay in Telegram." }
+    /** Photo access was just allowed, or the channel became ready: pick up the photos. */
+    fun tgChanged() = io { Router.reroute(db, prefs); MediaScanner.scan(ctx); BackupWorker.runNow(ctx) }
+    fun setShortMinutes(min: Int) { prefs.tgShortMinutes = min; tgChanged() }
 }

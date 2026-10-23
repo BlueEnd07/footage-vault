@@ -55,6 +55,31 @@ apps; switch it on, go back and tap Update again. You can also check by hand in 
   Gifs* folder). Anything with "GIF" in its folder or file name is not shown and not uploaded. GIFs uploaded by older
   versions stay on YouTube until you delete them.
 
+## Photos and short videos on Telegram
+
+Long videos go to YouTube. **Photos and short videos** can go to a **private channel in your own Telegram
+account**, as the original files: no re-encoding, no YouTube daily limit, and one gallery for both.
+
+Set it up once in **Settings → Telegram · photos and short videos**:
+1. Open **my.telegram.org**, sign in with your phone number, tap **API development tools** and create an app (any
+   name and short name). Copy **App api_id** and **App api_hash** into the card, then tap **Connect**. They're
+   stored only on the phone.
+2. Enter your phone number, then the login code Telegram sends you (and your two-step verification password, if
+   you have one).
+3. The app finds or makes a private channel called **Footage Vault**, owned by you. Tap **Allow photos** so it can
+   read your photos.
+4. Choose which videos go to Telegram: none, or up to 1, 3 (default), 5 or 10 minutes long.
+
+- Photos and short videos from your backup folders upload in the background, under the same Wi-Fi / charging rules.
+  Each one is posted to the channel as a file, with its name, date and GPS in the caption.
+- In the gallery they sit with your videos. A small paper-plane mark means "on Telegram"; photos open full size with
+  pinch-to-zoom. Info says *Backed up to Telegram (original file)*.
+- **Delete everywhere** removes the Telegram post too.
+- For now, Telegram items stay on the phone after backup (**Free up space** skips them), and other devices and the
+  PC app don't show them yet. These come in the next versions.
+- **Disconnect Telegram** signs out on this phone. The channel and its files stay in your Telegram account.
+- Telegram's rules don't promise to keep files forever, so don't treat it as the only copy of anything irreplaceable.
+
 ## From Google Photos
 
 Videos already in Google Photos can be moved to YouTube through the share sheet:

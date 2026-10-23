@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.CloudOff
@@ -268,7 +269,7 @@ fun Tile(item: Item, isSelected: Boolean, selecting: Boolean, compact: Boolean, 
             model = item.thumbModel, contentDescription = item.name, contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().scale(scale).clip(RoundedCornerShape(if (isSelected) 10.dp else 0.dp)),
         )
-        if (!compact) Row(Modifier.align(Alignment.TopEnd).padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!compact && !item.isPhoto) Row(Modifier.align(Alignment.TopEnd).padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(fmtDur(item.durationMs), style = shadow)
             Icon(Icons.Outlined.PlayCircle, null, tint = Color.White, modifier = Modifier.padding(start = 2.dp).size(14.dp))
         }
@@ -298,5 +299,7 @@ private fun Badge(item: Item, compact: Boolean, modifier: Modifier) {
             modifier = modifier.size(s).background(red, CircleShape).padding(if (compact) 2.dp else 4.dp))
         "failed" -> Icon(Icons.Outlined.ErrorOutline, "Backup failed", tint = Color.White,
             modifier = modifier.size(s).background(red, CircleShape).padding(if (compact) 1.dp else 3.dp))
+        "backed_up" -> if (item.onTelegram && !compact) Icon(Icons.AutoMirrored.Outlined.Send, "On Telegram", tint = Color.White,
+            modifier = modifier.size(18.dp).background(Color.Black.copy(alpha = .45f), CircleShape).padding(4.dp))
     }
 }

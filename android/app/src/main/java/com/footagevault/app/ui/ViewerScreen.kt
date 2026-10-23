@@ -1,5 +1,9 @@
 package com.footagevault.app.ui
 
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.detectTapGestures
 import android.view.GestureDetector
 import android.view.MotionEvent
 import androidx.compose.animation.core.Animatable
@@ -139,9 +143,10 @@ fun shareItems(ctx: Context, items: List<Item>): String? {
         else Uri.parse(it.uri)
     }
     val links = items.filter { !(it.onPhone && it.uri != null) && it.ytId != null }
+    val type = if (items.any { it.isPhoto }) "*/*" else "video/*"
     val intent = when {
-        files.size == 1 && links.isEmpty() -> Intent(Intent.ACTION_SEND).setType("video/*").putExtra(Intent.EXTRA_STREAM, files[0])
-        files.isNotEmpty() && links.isEmpty() -> Intent(Intent.ACTION_SEND_MULTIPLE).setType("video/*")
+        files.size == 1 && links.isEmpty() -> Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, files[0])
+        files.isNotEmpty() && links.isEmpty() -> Intent(Intent.ACTION_SEND_MULTIPLE).setType(type)
             .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files))
         links.isNotEmpty() && files.isEmpty() -> Intent(Intent.ACTION_SEND).setType("text/plain")
             .putExtra(Intent.EXTRA_TEXT, links.joinToString("\n") { "https://youtu.be/${it.ytId}" })
@@ -236,9 +241,13 @@ fun ViewerScreen(
                 val item = all.firstOrNull { it.id == list[page].id } ?: list[page]
                 val isCurrent = page == pager.currentPage
                 when {
+                    item.isPhoto && item.onPhone && item.uri != null -> PhotoView(item)
                     isCurrent && item.onPhone && item.uri != null -> LocalPlayer(item, vm.prefs)
                     else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                        if (!item.onPhone && item.tgMsg != null) FilledTonalButton(onClick = {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(com.footagevault.app.net.Telegram.link(ctx, item.tgMsg))))
+                        }) { Text("Open in Telegram") }
                         if (!item.onPhone && item.ytId != null) {
                             if (item.playsInYouTubePlayer()) {
                                 Surface(onClick = { playOnYouTubeHere(page) }, shape = CircleShape, color = Color.Black.copy(.55f), modifier = Modifier.size(76.dp)) {
@@ -325,6 +334,25 @@ private fun BarButton(icon: ImageVector, label: String, tint: Color = Color.Whit
     }
 }
 
+/** A photo: pinch to zoom, double-tap for 2.5×. Swiping between photos works while it isn't zoomed. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PhotoView(item: Item) {
+    var scale by remember(item.id) { mutableFloatStateOf(1f) }
+    var offset by remember(item.id) { mutableStateOf(Offset.Zero) }
+    val state = rememberTransformableState { zoom, pan, _ ->
+        scale = (scale * zoom).coerceIn(1f, 6f)
+        offset = if (scale > 1f) offset + pan else Offset.Zero
+    }
+    AsyncImage(
+        model = Uri.parse(item.uri), contentDescription = item.name, contentScale = ContentScale.Fit,
+        modifier = Modifier.fillMaxSize()
+            .pointerInput(item.id) { detectTapGestures(onDoubleTap = { scale = if (scale > 1f) 1f else 2.5f; offset = Offset.Zero }) }
+            .transformable(state, canPan = { scale > 1f })
+            .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y },
+    )
+}
+
 /** Phone video: resumes where it stopped, double-tap left/right to skip 10 seconds. */
 @Composable
 private fun LocalPlayer(item: Item, prefs: com.footagevault.app.data.Prefs) {
@@ -386,11 +414,11 @@ private fun InfoSheet(it: Item, onChangeDate: () -> Unit) {
             IconButton(onClick = onChangeDate) { Icon(Icons.Outlined.EditCalendar, "Change date") }
         }
         val meta = listOfNotNull(if (it.width > 0) "${it.width} × ${it.height}" else null,
-            if (it.size > 0) BackupWorker.fmtSize(it.size) else null, fmtDur(it.durationMs)).joinToString(" · ")
-        InfoRow(Icons.Outlined.Movie, it.name, meta)
+            if (it.size > 0) BackupWorker.fmtSize(it.size) else null, if (it.isPhoto) null else fmtDur(it.durationMs)).joinToString(" · ")
+        InfoRow(if (it.isPhoto) Icons.Outlined.Image else Icons.Outlined.Movie, it.name, meta)
         if (it.place != null) InfoRow(Icons.Outlined.Place, it.place, "%.4f, %.4f".format(it.lat, it.lon))
         val (icon, text) = when (it.status) {
-            "backed_up", "youtube" -> Icons.Outlined.CloudDone to "Backed up to YouTube"
+            "backed_up", "youtube" -> Icons.Outlined.CloudDone to if (it.onTelegram) "Backed up to Telegram (original file)" else "Backed up to YouTube"
             "failed" -> Icons.Outlined.ErrorOutline to "Backup failed"
             "local" -> Icons.Outlined.Smartphone to "Only on this phone (folder not backed up)"
             "copied" -> Icons.Outlined.CloudUpload to "Copied · uploads once the rest are copied"
