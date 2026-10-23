@@ -144,6 +144,11 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                         else "Unlisted needs your Google project to pass YouTube's free API audit first. Until then YouTube makes uploads private anyway.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
                     )
+                    val items by vm.items.collectAsState()
+                    val priv = items.count { it.ytId != null && it.privacy == "private" }
+                    if (priv > 0) OutlinedButton(onClick = { vm.makeUnlisted(vm.privateVideos()) }, modifier = Modifier.padding(top = 8.dp)) {
+                        Text("Make $priv private video${if (priv == 1) "" else "s"} unlisted")
+                    }
                 }
 
                 Card(Icons.Outlined.Folder, "Folders to back up") {

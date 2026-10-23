@@ -34,6 +34,11 @@ class Prefs(ctx: Context) {
         set(v) = p.edit { putString("privacy", v) }
 
     /** Set when YouTube turned an "unlisted" upload into "private" (project not audited). */
+    /** YouTube refused to make an upload unlisted: stop asking after each upload (Studio's bulk edit works). */
+    var unlistRefused: Boolean
+        get() = p.getBoolean("unlist_refused", false)
+        set(v) = p.edit { putBoolean("unlist_refused", v) }
+
     var forcedPrivate: Boolean
         get() = p.getBoolean("forced_private", false)
         set(v) = p.edit { putBoolean("forced_private", v) }

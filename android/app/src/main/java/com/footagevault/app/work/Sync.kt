@@ -181,7 +181,15 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
             val v = infos[it.ytId]
             when {
                 v == null -> db.update(it.id, "status" to "failed", "error" to "Video not found on YouTube")
-                v.uploadStatus == "processed" -> db.update(it.id, "status" to "backed_up", "privacy" to v.privacy, "error" to null)
+                v.uploadStatus == "processed" -> {
+                    var privacy = v.privacy
+                    // "Unlisted" chosen in Settings, but YouTube made the upload private: ask once more now it's done.
+                    if (prefs.privacy == "unlisted" && privacy == "private" && !prefs.unlistRefused) {
+                        val got = try { yt.setPrivacy(v.id, "unlisted") } catch (e: ApiException) { if (e.isQuota) throw e; null }
+                        if (got == "unlisted") privacy = got else prefs.unlistRefused = true
+                    }
+                    db.update(it.id, "status" to "backed_up", "privacy" to privacy, "error" to null)
+                }
                 v.uploadStatus in setOf("failed", "rejected", "deleted") ->
                     db.update(it.id, "status" to "failed", "error" to "YouTube ${v.uploadStatus}: ${v.failure ?: ""}".trim())
             }

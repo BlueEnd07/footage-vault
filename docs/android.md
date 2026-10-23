@@ -46,9 +46,13 @@ apps; switch it on, go back and tap Update again. You can also check by hand in 
 - Uploads continue where they stopped, even after the app or phone restarts.
 - A progress notification shows while uploading. When videos are safely backed up you get
   **"Free up X GB"**, and if something fails, **"Upload problem"**.
-- **Privacy of new uploads:** *Private* (only you) or *Unlisted* (anyone with the link). Unlisted only works once
-  your Google project has passed YouTube's API audit; until then YouTube makes uploads private anyway, and the app
-  tells you.
+- **Privacy of new uploads:** *Private* (only you) or *Unlisted* (anyone with the link). YouTube makes uploads from
+  apps that haven't passed its API audit private. With *Unlisted* chosen, the app asks YouTube to switch each upload
+  to unlisted once it's finished, and stops asking if YouTube refuses.
+- **Make unlisted:** select videos → **⋮ → Make unlisted**, or **Settings → Privacy → Make N private videos
+  unlisted**. Unlisted videos play inside the app. Each change uses about 50 of YouTube's 10,000 daily units. If
+  YouTube refuses, the app shows the route that always works: YouTube Studio → Content → select all → Edit →
+  Visibility → Unlisted.
 - The status pill at the top shows the state: **Backed up**, **N left**, **N waiting** (for Wi-Fi), **Paused**,
   **Daily limit** or **problems**.
 - **GIFs are skipped.** WhatsApp and keyboard "GIFs" are saved as tiny videos (for example in a *WhatsApp Animated

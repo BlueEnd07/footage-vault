@@ -1,5 +1,9 @@
 package com.footagevault.app
 
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideOutVertically
@@ -239,6 +243,13 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                     IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
                     IconButton(onClick = { redating = selItems }) { Icon(Icons.Outlined.EditCalendar, "Change date") }
                     IconButton(onClick = { deleting = selItems }) { Icon(Icons.Outlined.Delete, "Delete") }
+                    var more by remember { mutableStateOf(false) }
+                    IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, "More") }
+                    DropdownMenu(more, { more = false }) {
+                        val priv = selItems.count { it.ytId != null && it.privacy == "private" }
+                        DropdownMenuItem(text = { Text(if (priv > 0) "Make unlisted ($priv)" else "Make unlisted") }, enabled = priv > 0,
+                            onClick = { more = false; vm.makeUnlisted(selItems); selected.clear() })
+                    }
                 },
             )
             else TopAppBar(
@@ -346,6 +357,24 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
         ViewerScreen(list, start, vm, onClose = { viewer = null; viewerRemoved = emptySet() }, onAddToAlbum = { picker = listOf(it) },
             onDelete = { deleting = listOf(it) }, removed = viewerRemoved)
     }
+    // YouTube kept them private: the bulk edit in YouTube Studio always works.
+    val unlistHelp by vm.unlistHelp.collectAsState()
+    if (unlistHelp) AlertDialog(
+        onDismissRequest = vm::dismissUnlistHelp,
+        title = { Text("YouTube kept them private") },
+        text = {
+            Text("YouTube doesn't let apps that haven't passed its review change this. You can do all of them at once in " +
+                "YouTube Studio: Content → tick the box at the top to select all → Edit → Visibility → Unlisted → Update.\n\n" +
+                "Then pull down in the app to refresh.")
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.dismissUnlistHelp()
+                ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://studio.youtube.com")))
+            }) { Text("Open YouTube Studio") }
+        },
+        dismissButton = { TextButton(onClick = vm::dismissUnlistHelp) { Text("OK") } },
+    )
     deleting?.let { list ->
         DeleteDialog(list, vm, onDeleted = { if (viewer != null) viewerRemoved = viewerRemoved + it.map { x -> x.id } }) { deleting = null; selected.clear() }
     }

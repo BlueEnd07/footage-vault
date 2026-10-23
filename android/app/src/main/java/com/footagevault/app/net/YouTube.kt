@@ -159,6 +159,22 @@ class YouTube(private val token: suspend () -> String) {
             .put("recordingDetails", recording))
     }
 
+    /**
+     * Changes a video's visibility and returns what YouTube actually set. YouTube may keep uploads from apps that
+     * haven't passed its API audit private, in which case this returns "private" or fails with 403.
+     */
+    suspend fun setPrivacy(id: String, privacy: String): String? {
+        val v = call("GET", "$api/videos?part=status&id=${enc(id)}").optJSONArray("items")?.optJSONObject(0)
+            ?: throw ApiException(404, "Video not found")
+        val st = v.getJSONObject("status")
+        // The whole status part is replaced: keep its other settings.
+        val out = JSONObject().put("privacyStatus", privacy)
+        for (k in listOf("embeddable", "license", "publicStatsViewable", "selfDeclaredMadeForKids", "containsSyntheticMedia"))
+            if (st.has(k)) out.put(k, st.get(k))
+        return call("PUT", "$api/videos?part=status", JSONObject().put("id", id).put("status", out))
+            .optJSONObject("status")?.optString("privacyStatus")
+    }
+
     /** Permanently deletes a video from the channel. */
     suspend fun deleteVideo(id: String) { call("DELETE", "$api/videos?id=${enc(id)}") }
 

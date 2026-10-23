@@ -231,6 +231,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun renameAlbum(pid: String, name: String) = io { yt.renamePlaylist(pid, name); db.addAlbum(pid, name) }
     fun deleteAlbum(pid: String) = io { yt.deletePlaylist(pid); db.removeAlbum(pid); say("Album deleted") }
 
+    // ---------- unlisted ----------
+    /** YouTube kept videos private: show how to do it in YouTube Studio instead. */
+    private val _unlistHelp = MutableStateFlow(false)
+    val unlistHelp = _unlistHelp.asStateFlow()
+    fun dismissUnlistHelp() { _unlistHelp.value = false }
+
+    fun privateVideos() = items.value.filter { it.ytId != null && it.privacy == "private" }
+
+    /**
+     * Makes these YouTube videos unlisted, so they play inside the app (about 50 of YouTube's 10,000 daily units each).
+     * Stops early if YouTube refuses, and explains the Studio route.
+     */
+    fun makeUnlisted(list: List<Item>) = io {
+        val todo = list.filter { it.ytId != null && it.privacy == "private" }
+        if (todo.isEmpty()) return@io say("Nothing private to change")
+        _busy.value = true
+        var done = 0; var refused = 0
+        try {
+            for (it in todo) {
+                val got = try { yt.setPrivacy(it.ytId!!, "unlisted") } catch (e: ApiException) {
+                    if (e.isQuota) { say(if (done > 0) "$done made unlisted. YouTube's daily limit is reached; do the rest tomorrow." else "YouTube's daily limit is reached. Try tomorrow."); return@io }
+                    if (e.isNotFound) continue
+                    if (e.code == 403 || e.code == 400) null else throw e
+                }
+                if (got == "unlisted") { db.update(it.id, "privacy" to "unlisted"); done++ } else refused++
+                if (refused >= 2 && done == 0) break  // YouTube is refusing: don't spend the daily limit on the rest
+            }
+        } finally { _busy.value = false }
+        if (refused > 0) { prefs.unlistRefused = true; _unlistHelp.value = true }
+        else { prefs.unlistRefused = false; say(if (done == 1) "Now unlisted. It plays inside the app." else "$done now unlisted. They play inside the app.") }
+    }
+
     // ---------- share ----------
     /**
      * Shares the files themselves: photos as images, videos as video files. Ones no longer on the phone are fetched
