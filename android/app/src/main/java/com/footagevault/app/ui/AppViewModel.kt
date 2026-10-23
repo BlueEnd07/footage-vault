@@ -232,16 +232,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteAlbum(pid: String) = io { yt.deletePlaylist(pid); db.removeAlbum(pid); say("Album deleted") }
 
     // ---------- free up space ----------
-    // Telegram copies can't be opened from the app yet (1.12), so those stay on the phone for now.
-    fun freeCandidates() = items.value.filter { it.onPhone && it.status == "backed_up" && it.uri != null && !it.onTelegram }
+    fun freeCandidates() = items.value.filter { it.onPhone && it.status == "backed_up" && it.uri != null }
 
     /** Re-checks each video on YouTube, then asks Android to delete them (one system prompt). */
     fun freeUpSpace(list: List<Item> = freeCandidates()) = io {
         if (list.isEmpty()) return@io say("Nothing to free up")
         _busy.value = true
-        val safe = try { sync.verifySafe(list) } finally { _busy.value = false }
-        if (safe.isEmpty()) return@io say("Couldn't confirm these on YouTube yet. Try again later.")
-        if (safe.size < list.size) say("${list.size - safe.size} kept: YouTube's copy didn't check out")
+        // Each copy is checked where it lives: YouTube (processed, same length) or Telegram (post holds the whole file).
+        val (onTg, onYt) = list.partition { it.onTelegram }
+        val safe = try {
+            (if (onYt.isEmpty()) emptyList() else sync.verifySafe(onYt)) + onTg.filter { Telegram.verify(ctx, it) }
+        } finally { _busy.value = false }
+        if (safe.isEmpty()) return@io say("Couldn't confirm the backups yet. Try again later.")
+        if (safe.size < list.size) say("${list.size - safe.size} kept: the backup copy didn't check out")
         requestPhoneDelete(safe)
     }
 
@@ -258,7 +261,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun forgetPhoneCopy(it: Item) {
-        if (it.ytId != null) db.update(it.id, "on_phone" to false, "media_id" to null, "uri" to null)
+        if (it.ytId != null || it.tgMsg != null) db.update(it.id, "on_phone" to false, "media_id" to null, "uri" to null)
         else db.delete(it.id)  // a phone-only video: nothing left of it
     }
 
@@ -267,7 +270,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!ok) { pendingDelete = emptyList(); return@io }
         val bytes = pendingDelete.sumOf { it.size }
         for (it in pendingDelete) forgetPhoneCopy(it)
-        say(if (pendingDelete.all { it.ytId != null }) "Freed ${BackupWorker.fmtSize(bytes)}. They're still on YouTube." else "Deleted from the phone")
+        say(if (pendingDelete.all { it.ytId != null || it.tgMsg != null }) "Freed ${BackupWorker.fmtSize(bytes)}. They're still in your backup." else "Deleted from the phone")
         pendingDelete = emptyList()
     }
 

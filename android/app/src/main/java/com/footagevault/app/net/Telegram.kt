@@ -267,6 +267,41 @@ object Telegram {
         }
     }
 
+    /** The file in a backed-up post (its id is only valid in this TDLib session, so it's looked up each time). */
+    private suspend fun fileOf(ctx: Context, it: Item): dev.g000sha256.tdl.dto.File {
+        val c = start(ctx) ?: throw TelegramException(401, "Telegram isn't connected")
+        if (!ready(ctx)) throw TelegramException(401, "Telegram isn't connected. Open Settings → Telegram.")
+        val msg = c.getMessage(Prefs(ctx).tgChatId, it.tgMsg ?: throw TelegramException(404, "Not on Telegram")).get()
+        return (msg.content as? MessageDocument)?.document?.document ?: throw TelegramException(404, "The Telegram post has no file")
+    }
+
+    /** Before "Free up space": the post is still there and holds the whole file. */
+    suspend fun verify(ctx: Context, it: Item): Boolean = try {
+        val f = fileOf(ctx, it)
+        f.remote.isUploadingCompleted && (f.size == it.size || f.expectedSize == it.size)
+    } catch (_: TelegramException) { false }
+
+    /**
+     * Downloads the original from the channel into TDLib's cache (once) and returns its path, for viewing items that
+     * are no longer on the phone.
+     */
+    suspend fun download(ctx: Context, it: Item, onProgress: (Float) -> Unit): String = coroutineScope {
+        val c = start(ctx) ?: throw TelegramException(401, "Telegram isn't connected")
+        val f = fileOf(ctx, it)
+        if (f.local.isDownloadingCompleted && File(f.local.path).exists()) return@coroutineScope f.local.path
+        // TDLib may still point at the phone file it uploaded from, which is now deleted: forget that copy first.
+        if (f.local.isDownloadingCompleted) runCatching { c.deleteFile(f.id) }
+        val total = if (f.size > 0) f.size else f.expectedSize
+        val watch = launch(start = CoroutineStart.UNDISPATCHED) {
+            c.fileUpdates.collect { u -> if (u.file.id == f.id && total > 0) onProgress(u.file.local.downloadedSize.toFloat() / total) }
+        }
+        try {
+            val done = c.downloadFile(f.id, priority = 32, offset = 0, limit = 0, synchronous = true).get()
+            if (!done.local.isDownloadingCompleted) throw TelegramException(500, "The download didn't finish")
+            done.local.path
+        } finally { watch.cancel() }
+    }
+
     /** Opens the file in the Telegram app (t.me link to the channel post). */
     fun link(ctx: Context, messageId: Long): String {
         val channel = Prefs(ctx).tgChatId.toString().removePrefix("-100")

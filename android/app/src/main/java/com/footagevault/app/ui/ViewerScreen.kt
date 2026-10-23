@@ -1,5 +1,6 @@
 package com.footagevault.app.ui
 
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -241,6 +242,7 @@ fun ViewerScreen(
                 val item = all.firstOrNull { it.id == list[page].id } ?: list[page]
                 val isCurrent = page == pager.currentPage
                 when {
+                    !item.onPhone && item.tgMsg != null && isCurrent -> TelegramView(item, vm.prefs)
                     item.isPhoto && item.onPhone && item.uri != null -> PhotoView(item)
                     isCurrent && item.onPhone && item.uri != null -> LocalPlayer(item, vm.prefs)
                     else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -330,6 +332,40 @@ private fun BarButton(icon: ImageVector, label: String, tint: Color = Color.Whit
         Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, label, tint = tint)
             Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+/** Not on the phone any more: fetch the original from Telegram (kept in its cache), then show or play it. */
+@Composable
+private fun TelegramView(item: Item, prefs: com.footagevault.app.data.Prefs) {
+    val ctx = LocalContext.current
+    var path by remember(item.id) { mutableStateOf<String?>(null) }
+    var progress by remember(item.id) { mutableFloatStateOf(0f) }
+    var error by remember(item.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(item.id) {
+        try { path = com.footagevault.app.net.Telegram.download(ctx, item) { progress = it } }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { error = e.message ?: "Couldn't load it from Telegram" }
+    }
+    val local = path?.let { item.copy(uri = Uri.fromFile(java.io.File(it)).toString(), onPhone = true) }
+    when {
+        local != null && item.isPhoto -> PhotoView(local)
+        local != null -> LocalPlayer(local, prefs)
+        else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            Column(horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.background(Color.Black.copy(.55f), RoundedCornerShape(12.dp)).padding(16.dp)) {
+                if (error == null) {
+                    CircularProgressIndicator(progress = { progress.coerceAtLeast(.03f) }, color = Color.White)
+                    Text("Loading from Telegram… ${(progress * 100).toInt()}%", color = Color.White, modifier = Modifier.padding(top = 10.dp))
+                } else {
+                    Text(error!!, color = Color.White, textAlign = TextAlign.Center)
+                    FilledTonalButton(onClick = {
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(com.footagevault.app.net.Telegram.link(ctx, item.tgMsg!!))))
+                    }, modifier = Modifier.padding(top = 10.dp)) { Text("Open in Telegram") }
+                }
+            }
         }
     }
 }
@@ -428,7 +464,8 @@ private fun InfoSheet(it: Item, onChangeDate: () -> Unit) {
         }
         InfoRow(icon, text, listOfNotNull(it.privacy?.let { p -> "YouTube: $p" }, it.error).joinToString(" · ").ifBlank { null })
         if (it.isImport) InfoRow(Icons.Outlined.Smartphone, "Copied from Google Photos", "The app's copy is removed once it's on YouTube")
-        else InfoRow(Icons.Outlined.Smartphone, if (it.onPhone) "On this phone" else "Not on this phone", if (!it.onPhone && it.ytId != null) "Plays from YouTube" else null)
+        else InfoRow(Icons.Outlined.Smartphone, if (it.onPhone) "On this phone" else "Not on this phone",
+            if (!it.onPhone && it.tgMsg != null) "Opens from Telegram" else if (!it.onPhone && it.ytId != null) "Plays from YouTube" else null)
         Spacer(Modifier.height(8.dp))
     }
 }

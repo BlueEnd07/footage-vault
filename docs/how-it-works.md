@@ -72,6 +72,10 @@ and `fv:{"n","r","s","k","d","w","h","lat","lon"}` (`k` = `photo` / `video`). Th
 the preview is kept in `files/thumbs/` (`thumb`) for the gallery. TDLib's message database is off, so a send that
 Android interrupts isn't re-sent later; the half-sent message is deleted and the item retried.
 
+Before **Free up space** deletes a phone copy, `Telegram.verify` re-reads the post (`getMessage`) and checks that
+the upload completed with the same size. Items that left the phone are opened with `Telegram.download`
+(`downloadFile` into TDLib's cache), then shown or played from that file.
+
 Photos are scanned from MediaStore only when Telegram is set up and photo access (`READ_MEDIA_IMAGES`) is granted.
 Uploads to Telegram run before the YouTube queue in the same backup run, with their own lock.
 

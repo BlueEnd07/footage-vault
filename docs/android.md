@@ -75,8 +75,10 @@ Set it up once in **Settings → Telegram · photos and short videos**:
 - In the gallery they sit with your videos. A small paper-plane mark means "on Telegram"; photos open full size with
   pinch-to-zoom. Info says *Backed up to Telegram (original file)*.
 - **Delete everywhere** removes the Telegram post too.
-- For now, Telegram items stay on the phone after backup (**Free up space** skips them), and other devices and the
-  PC app don't show them yet. These come in the next versions.
+- **Free up space** includes Telegram items: each post is checked first (still there, whole file). Afterwards
+  the gallery keeps a preview, and opening one downloads the original from Telegram (it's cached, so the second
+  time is instant). **Open in Telegram** is there if loading fails.
+- Other devices and the PC app don't show Telegram items yet.
 - **Disconnect Telegram** signs out on this phone. The channel and its files stay in your Telegram account.
 - Telegram's rules don't promise to keep files forever, so don't treat it as the only copy of anything irreplaceable.
 
