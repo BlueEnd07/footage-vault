@@ -144,7 +144,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         if (prefs.userPaused || ImportService.running) return
         if (db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND store='telegram'").isEmpty()) return
         if (!Telegram.ready(applicationContext)) {
-            problem = "Photos and short videos wait for Telegram. Open Settings → Telegram to sign in."
+            problem = "Photos and short videos are waiting for sign-in. Open Settings → Telegram."
             return
         }
         if (!tgUploading.tryLock()) return
@@ -156,7 +156,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND store='telegram'", order = "recorded ASC")
                 .firstOrNull() ?: return
             val left = db.items("status IN ('queued','uploading') AND on_phone=1 AND store='telegram'").size
-            val title = "Backing up to Telegram · $left left"
+            val title = "Backing up · $left left"
             val shown = tryForeground(title, it.name)
             db.update(it.id, "status" to "uploading", "error" to null, "progress" to 0f)
             try {
@@ -206,7 +206,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val safe = db.items("status='backed_up' AND on_phone=1")
         if (safe.size > prefs.announcedSafe) {
             val bytes = safe.sumOf { it.size }
-            Notify.safeToDelete(applicationContext, safe.size, fmtSize(bytes))
+            Notify.safeToDelete(applicationContext, com.footagevault.app.data.safelyBackedUp(safe), fmtSize(bytes))
         }
         prefs.announcedSafe = safe.size
     }

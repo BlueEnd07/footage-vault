@@ -1,5 +1,10 @@
 package com.footagevault.app.ui
 
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.foundation.gestures.transformable
@@ -136,33 +141,6 @@ fun openOnYouTube(ctx: Context, ytId: String) {
     }
 }
 
-/** Shares the phone's file, or the YouTube link once the video only lives on YouTube. */
-fun shareItems(ctx: Context, items: List<Item>): String? {
-    val files = items.filter { it.onPhone && it.uri != null }.map { it ->
-        // Google Photos copies are the app's own files: shared through the FileProvider.
-        if (it.isImport) androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", java.io.File(Uri.parse(it.uri).path!!))
-        else Uri.parse(it.uri)
-    }
-    val links = items.filter { !(it.onPhone && it.uri != null) && it.ytId != null }
-    val type = if (items.any { it.isPhoto }) "*/*" else "video/*"
-    val intent = when {
-        files.size == 1 && links.isEmpty() -> Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, files[0])
-        files.isNotEmpty() && links.isEmpty() -> Intent(Intent.ACTION_SEND_MULTIPLE).setType(type)
-            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files))
-        links.isNotEmpty() && files.isEmpty() -> Intent(Intent.ACTION_SEND).setType("text/plain")
-            .putExtra(Intent.EXTRA_TEXT, links.joinToString("\n") { "https://youtu.be/${it.ytId}" })
-        files.isNotEmpty() -> Intent(Intent.ACTION_SEND_MULTIPLE).setType("video/*")
-            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files))
-        else -> return "Nothing to share yet"
-    }.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    ctx.startActivity(Intent.createChooser(intent, "Share").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    return when {
-        files.isNotEmpty() && links.isNotEmpty() -> "Shared the ${files.size} on this phone; the others are only on YouTube"
-        links.any { it.privacy == "private" } -> "Private videos: only you can open these links"
-        else -> null
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ViewerScreen(
@@ -175,6 +153,7 @@ fun ViewerScreen(
     val pager = rememberPagerState(initialPage = start.coerceIn(0, (list.size - 1).coerceAtLeast(0))) { list.size }
     var showInfo by rememberSaveable { mutableStateOf(false) }
     var changingDate by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Pair<Item, Uri>?>(null) }
     val current = list.getOrNull(pager.currentPage) ?: return onClose()
     // Live version of the current item (favourite / status changes)
     val all by vm.items.collectAsState()
@@ -238,18 +217,15 @@ fun ViewerScreen(
                     }
                 }
         ) {
-            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { list[it].id }) { page ->
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { list[it].id }, beyondViewportPageCount = 1) { page ->
                 val item = all.firstOrNull { it.id == list[page].id } ?: list[page]
                 val isCurrent = page == pager.currentPage
                 when {
-                    !item.onPhone && item.tgMsg != null && isCurrent -> TelegramView(item, vm.prefs)
+                    !item.onPhone && item.tgMsg != null -> TelegramView(item, vm.prefs, isCurrent)
                     item.isPhoto && item.onPhone && item.uri != null -> PhotoView(item)
                     isCurrent && item.onPhone && item.uri != null -> LocalPlayer(item, vm.prefs)
                     else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-                        if (!item.onPhone && item.tgMsg != null) FilledTonalButton(onClick = {
-                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(com.footagevault.app.net.Telegram.link(ctx, item.tgMsg))))
-                        }) { Text("Open in Telegram") }
                         if (!item.onPhone && item.ytId != null) {
                             if (item.playsInYouTubePlayer()) {
                                 Surface(onClick = { playOnYouTubeHere(page) }, shape = CircleShape, color = Color.Black.copy(.55f), modifier = Modifier.size(76.dp)) {
@@ -292,9 +268,16 @@ fun ViewerScreen(
                     .navigationBarsPadding().padding(vertical = 6.dp).alpha(1f - drag * 3f),
                 horizontalArrangement = Arrangement.SpaceAround,
             ) {
-                BarButton(Icons.Outlined.Share, "Share") { shareItems(ctx, listOf(live))?.let(vm::say) }
+                BarButton(Icons.Outlined.Share, "Share") { vm.share(listOf(live)) }
                 BarButton(if (live.favorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, "Favourite",
                     if (live.favorite) Color(0xFFF28B82) else Color.White) { vm.setFavorite(listOf(live.id), !live.favorite) }
+                if (live.isPhoto) BarButton(Icons.Outlined.Tune, "Edit") {
+                    scope.launch {
+                        try { editing = live to editSource(ctx, live) }
+                        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (e: Exception) { vm.say(e.message ?: "Couldn't open this photo") }
+                    }
+                }
                 BarButton(Icons.Outlined.Info, "Info") { showInfo = true }
                 BarButton(Icons.Outlined.LibraryAdd, "Add to") { onAddToAlbum(live) }
                 BarButton(Icons.Outlined.Delete, "Delete") { onDelete(live) }
@@ -316,6 +299,9 @@ fun ViewerScreen(
         }
     }
 
+    editing?.let { (it, src) ->
+        EditorScreen(it, src, onClose = { editing = null }, onSaved = { editing = null; vm.say("Saved a copy. The original is unchanged."); vm.rescan() })
+    }
     if (showInfo) ModalBottomSheet(onDismissRequest = { showInfo = false }) { InfoSheet(live) { showInfo = false; changingDate = true } }
     if (changingDate) ChangeDateDialog(listOf(live), onDone = { d, t -> vm.setDate(listOf(live), d, t); changingDate = false },
         onDismiss = { changingDate = false })
@@ -336,35 +322,55 @@ private fun BarButton(icon: ImageVector, label: String, tint: Color = Color.Whit
     }
 }
 
-/** Not on the phone any more: fetch the original from Telegram (kept in its cache), then show or play it. */
+/**
+ * Not on the phone any more. The preview shows at once (it's what the opening animation flies in), the original
+ * loads from Telegram behind it and fades in when it's there. Photos next to the current one load too, so swiping is
+ * instant; videos load when you land on them. A small ring shows only if it takes a moment.
+ */
 @Composable
-private fun TelegramView(item: Item, prefs: com.footagevault.app.data.Prefs) {
+private fun TelegramView(item: Item, prefs: com.footagevault.app.data.Prefs, isCurrent: Boolean) {
     val ctx = LocalContext.current
-    var path by remember(item.id) { mutableStateOf<String?>(null) }
+    var path by remember(item.id) { mutableStateOf(com.footagevault.app.net.Telegram.cachedCopy(item.id)) }
     var progress by remember(item.id) { mutableFloatStateOf(0f) }
     var error by remember(item.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(item.id) {
+    var slow by remember(item.id) { mutableStateOf(false) }
+    val load = item.isPhoto || isCurrent
+    LaunchedEffect(item.id, load) {
+        if (!load || path != null) return@LaunchedEffect
+        launch { delay(450); slow = true }
         try { path = com.footagevault.app.net.Telegram.download(ctx, item) { progress = it } }
         catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (e: Exception) { error = e.message ?: "Couldn't load it from Telegram" }
+        catch (e: Exception) { error = e.message ?: "Couldn't load the original" }
     }
     val local = path?.let { item.copy(uri = Uri.fromFile(java.io.File(it)).toString(), onPhone = true) }
-    when {
-        local != null && item.isPhoto -> PhotoView(local)
-        local != null -> LocalPlayer(local, prefs)
-        else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-            Column(horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.background(Color.Black.copy(.55f), RoundedCornerShape(12.dp)).padding(16.dp)) {
-                if (error == null) {
-                    CircularProgressIndicator(progress = { progress.coerceAtLeast(.03f) }, color = Color.White)
-                    Text("Loading from Telegram… ${(progress * 100).toInt()}%", color = Color.White, modifier = Modifier.padding(top = 10.dp))
-                } else {
-                    Text(error!!, color = Color.White, textAlign = TextAlign.Center)
-                    FilledTonalButton(onClick = {
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(com.footagevault.app.net.Telegram.link(ctx, item.tgMsg!!))))
-                    }, modifier = Modifier.padding(top = 10.dp)) { Text("Open in Telegram") }
-                }
+    Box(Modifier.fillMaxSize()) {
+        when {
+            local != null && item.isPhoto -> Box(Modifier.fillMaxSize()) {
+                // The preview stays underneath while the original fades in on top (same framing, so it just sharpens).
+                AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                PhotoView(local, fadeMs = 350)
+            }
+            local != null && isCurrent -> LocalPlayer(local, prefs)
+            else -> AsyncImage(item.thumbModel, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+        }
+        AnimatedVisibility(visible = local == null && error == null && slow && load, enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 112.dp)) {
+            Row(Modifier.background(Color.Black.copy(.45f), CircleShape).padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(progress = { progress.coerceAtLeast(.04f) }, color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (item.isPhoto) "Loading full quality" else "Loading video ${(progress * 100).toInt()}%", color = Color.White,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        AnimatedVisibility(visible = error != null && isCurrent, enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 112.dp)) {
+            Row(Modifier.background(Color.Black.copy(.55f), RoundedCornerShape(20.dp)).padding(start = 14.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Showing the preview", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                TextButton(onClick = {
+                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(com.footagevault.app.net.Telegram.link(ctx, item.tgMsg!!))))
+                }) { Text("Open in Telegram") }
             }
         }
     }
@@ -373,15 +379,17 @@ private fun TelegramView(item: Item, prefs: com.footagevault.app.data.Prefs) {
 /** A photo: pinch to zoom, double-tap for 2.5×. Swiping between photos works while it isn't zoomed. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PhotoView(item: Item) {
+private fun PhotoView(item: Item, fadeMs: Int = 200) {
     var scale by remember(item.id) { mutableFloatStateOf(1f) }
     var offset by remember(item.id) { mutableStateOf(Offset.Zero) }
     val state = rememberTransformableState { zoom, pan, _ ->
         scale = (scale * zoom).coerceIn(1f, 6f)
         offset = if (scale > 1f) offset + pan else Offset.Zero
     }
+    val ctx = LocalContext.current
+    val request = remember(item.uri) { coil.request.ImageRequest.Builder(ctx).data(Uri.parse(item.uri)).crossfade(fadeMs).build() }
     AsyncImage(
-        model = Uri.parse(item.uri), contentDescription = item.name, contentScale = ContentScale.Fit,
+        model = request, contentDescription = item.name, contentScale = ContentScale.Fit,
         modifier = Modifier.fillMaxSize()
             .pointerInput(item.id) { detectTapGestures(onDoubleTap = { scale = if (scale > 1f) 1f else 2.5f; offset = Offset.Zero }) }
             .transformable(state, canPan = { scale > 1f })
@@ -454,18 +462,18 @@ private fun InfoSheet(it: Item, onChangeDate: () -> Unit) {
         InfoRow(if (it.isPhoto) Icons.Outlined.Image else Icons.Outlined.Movie, it.name, meta)
         if (it.place != null) InfoRow(Icons.Outlined.Place, it.place, "%.4f, %.4f".format(it.lat, it.lon))
         val (icon, text) = when (it.status) {
-            "backed_up", "youtube" -> Icons.Outlined.CloudDone to if (it.onTelegram) "Backed up to Telegram (original file)" else "Backed up to YouTube"
+            "backed_up", "youtube" -> Icons.Outlined.CloudDone to "Backed up"
             "failed" -> Icons.Outlined.ErrorOutline to "Backup failed"
             "local" -> Icons.Outlined.Smartphone to "Only on this phone (folder not backed up)"
             "copied" -> Icons.Outlined.CloudUpload to "Copied · uploads once the rest are copied"
-            "processing" -> Icons.Outlined.CloudUpload to "Uploaded · YouTube is processing"
+            "processing" -> Icons.Outlined.CloudUpload to "Uploaded · finishing up"
             "uploading" -> Icons.Outlined.CloudUpload to "Uploading · ${(it.progress * 100).toInt()}%"
             else -> Icons.Outlined.CloudUpload to "Waiting to back up"
         }
-        InfoRow(icon, text, listOfNotNull(it.privacy?.let { p -> "YouTube: $p" }, it.error).joinToString(" · ").ifBlank { null })
+        InfoRow(icon, text, it.error)
         if (it.isImport) InfoRow(Icons.Outlined.Smartphone, "Copied from Google Photos", "The app's copy is removed once it's on YouTube")
         else InfoRow(Icons.Outlined.Smartphone, if (it.onPhone) "On this phone" else "Not on this phone",
-            if (!it.onPhone && it.tgMsg != null) "Opens from Telegram" else if (!it.onPhone && it.ytId != null) "Plays from YouTube" else null)
+            if (!it.onPhone && (it.tgMsg != null || it.ytId != null)) "Opens from your backup" else null)
         Spacer(Modifier.height(8.dp))
     }
 }

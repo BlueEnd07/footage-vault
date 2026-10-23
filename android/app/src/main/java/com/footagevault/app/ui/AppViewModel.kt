@@ -122,18 +122,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val resume = java.time.format.DateTimeFormatter.ofPattern("EEE h:mm a")
             .format(java.time.Instant.ofEpochMilli(prefs.pausedUntil).atZone(java.time.ZoneId.systemDefault()))
         return when {
-            tgWaiting && !tgReady && pending.none { !it.onTelegram } -> "Waiting for Telegram" to
-                "Photos and short videos go to Telegram. Open Settings → Telegram to sign in."
+            tgWaiting && !tgReady && pending.none { !it.onTelegram } -> "Waiting for sign-in" to
+                "Open Settings → Telegram and sign in to back these up."
             !prefs.signedIn && pending.any { !it.onTelegram } -> "Not signed in" to "Sign in to YouTube (Settings) to start uploading."
             prefs.userPaused -> "Backup is paused" to "Turn off Pause backup in Settings."
-            System.currentTimeMillis() < prefs.pausedUntil -> "YouTube's daily limit is reached" to
-                "YouTube only allows a few uploads a day for your Google project. They continue by themselves after $resume."
+            System.currentTimeMillis() < prefs.pausedUntil -> "Daily upload limit reached" to
+                "Long videos continue by themselves after $resume."
             ImportService.progress.value != null -> ImportService.progress.value!!.let { c ->
                 "Copying from Google Photos" to "${c.done} of ${c.total} copied (${BackupWorker.fmtSize(c.bytes)} of ${BackupWorker.fmtSize(c.totalBytes)}). " +
                     "Uploads start when all are copied. You can close the app."
             }
-            up != null -> "Uploading ${up.name}" to "${(up.progress * 100).toInt()}% · $waiting left"
-            waiting == 0 -> "YouTube is processing" to "${pending.size} uploaded. YouTube is finishing them, which can take a while for long videos."
+            up != null -> "Backing up ${up.name}" to "${(up.progress * 100).toInt()}% · $waiting left"
+            waiting == 0 -> "Finishing up" to "${pending.size} uploaded and being finished. Long videos can take a while."
             !online -> "No internet" to "Uploads start when the phone is online."
             prefs.wifiOnly && !unmetered -> "Waiting for Wi-Fi" to "Only on Wi-Fi is on in Settings, and the phone is on mobile data."
             prefs.chargingOnly && !charging -> "Waiting for charging" to "Only while charging is on in Settings. Plug the phone in."
@@ -231,6 +231,48 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun renameAlbum(pid: String, name: String) = io { yt.renamePlaylist(pid, name); db.addAlbum(pid, name) }
     fun deleteAlbum(pid: String) = io { yt.deletePlaylist(pid); db.removeAlbum(pid); say("Album deleted") }
 
+    // ---------- share ----------
+    /**
+     * Shares the files themselves: photos as images, videos as video files. Ones no longer on the phone are fetched
+     * from Telegram first; a video that only lives on YouTube can only be shared as its link.
+     */
+    fun share(list: List<Item>) = io {
+        val fetch = list.filter { !(it.onPhone && it.uri != null) && it.tgMsg != null }
+        if (fetch.isNotEmpty()) say("Getting ${com.footagevault.app.data.countWords(fetch)} ready…")
+        val auth = "${ctx.packageName}.files"
+        val files = mutableListOf<Uri>()
+        val links = mutableListOf<String>()
+        for (it in list) when {
+            it.onPhone && it.uri != null -> files += if (it.isImport)
+                androidx.core.content.FileProvider.getUriForFile(ctx, auth, java.io.File(Uri.parse(it.uri).path!!)) else Uri.parse(it.uri)
+            it.tgMsg != null -> files += androidx.core.content.FileProvider.getUriForFile(ctx, auth, java.io.File(Telegram.download(ctx, it) {}))
+            it.ytId != null -> links += "https://youtu.be/${it.ytId}"
+        }
+        if (files.isEmpty() && links.isEmpty()) return@io say("Nothing to share yet")
+        val shared = list.filter { it.onPhone || it.tgMsg != null }
+        val type = when {
+            shared.isNotEmpty() && shared.all { it.isPhoto } -> "image/*"
+            shared.isNotEmpty() && shared.none { it.isPhoto } -> "video/*"
+            files.isEmpty() -> "text/plain"
+            else -> "*/*"
+        }
+        val send = android.content.Intent(if (files.size > 1) android.content.Intent.ACTION_SEND_MULTIPLE else android.content.Intent.ACTION_SEND).setType(type)
+        when (files.size) {
+            0 -> {}
+            1 -> send.putExtra(android.content.Intent.EXTRA_STREAM, files[0])
+            else -> send.putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(files))
+        }
+        if (links.isNotEmpty()) send.putExtra(android.content.Intent.EXTRA_TEXT, links.joinToString("\n"))
+        if (files.isNotEmpty()) {
+            send.clipData = android.content.ClipData.newRawUri("", files[0]).apply { files.drop(1).forEach { u -> addItem(android.content.ClipData.Item(u)) } }
+            send.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        withContext(Dispatchers.Main) {
+            ctx.startActivity(android.content.Intent.createChooser(send, "Share")
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        }
+    }
+
     // ---------- free up space ----------
     fun freeCandidates() = items.value.filter { it.onPhone && it.status == "backed_up" && it.uri != null }
 
@@ -319,8 +361,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // Fresh rows: they no longer have a YouTube id, so the phone delete removes them completely.
             requestPhoneDelete(onPhone.mapNotNull { db.item(it.id) })
         }
-        val where = if (list.any { it.onTelegram }) if (list.any { it.ytId != null }) "YouTube and Telegram" else "Telegram" else "YouTube"
-        if (gone > 0) say("Deleted $gone from $where" + if (onPhone.isNotEmpty()) "; confirm to delete from the phone too" else "")
+        if (onPhone.isNotEmpty()) say("Confirm to remove the phone copies too")
+        else if (gone > 0) say(if (gone == 1) "Deleted" else "Deleted $gone")
     }
 
     // ---------- duplicates ----------

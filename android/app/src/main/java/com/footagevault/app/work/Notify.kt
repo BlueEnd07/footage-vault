@@ -54,8 +54,9 @@ object Notify {
             .setAutoCancel(true).setContentIntent(open(ctx, screen)).build())
     }
 
-    fun safeToDelete(ctx: Context, n: Int, size: String) =
-        post(ctx, ID_SAFE, "Free up $size", "$n video${if (n == 1) " is" else "s are"} safely backed up to YouTube. Tap to remove them from your phone.", "free")
+    /** [what] = "120 photos and 40 videos are safely backed up to YouTube and Telegram." */
+    fun safeToDelete(ctx: Context, what: String, size: String) =
+        post(ctx, ID_SAFE, "Free up $size", "$what Tap to remove them from your phone.", "free")
 
     fun signInNeeded(ctx: Context) =
         post(ctx, ID_SIGNIN, "Backup paused", "Sign in to YouTube again to keep backing up.", null)

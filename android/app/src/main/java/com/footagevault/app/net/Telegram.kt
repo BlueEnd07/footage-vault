@@ -285,7 +285,15 @@ object Telegram {
      * Downloads the original from the channel into TDLib's cache (once) and returns its path, for viewing items that
      * are no longer on the phone.
      */
-    suspend fun download(ctx: Context, it: Item, onProgress: (Float) -> Unit): String = coroutineScope {
+    private val copies = java.util.concurrent.ConcurrentHashMap<Long, String>()
+
+    /** An original already fetched this session (no Telegram round trip), or null. */
+    fun cachedCopy(itemId: Long): String? = copies[itemId]?.takeIf { File(it).exists() }
+
+    suspend fun download(ctx: Context, it: Item, onProgress: (Float) -> Unit): String =
+        (cachedCopy(it.id) ?: fetch(ctx, it, onProgress)).also { path -> copies[it.id] = path }
+
+    private suspend fun fetch(ctx: Context, it: Item, onProgress: (Float) -> Unit): String = coroutineScope {
         val c = start(ctx) ?: throw TelegramException(401, "Telegram isn't connected")
         val f = fileOf(ctx, it)
         if (f.local.isDownloadingCompleted && File(f.local.path).exists()) return@coroutineScope f.local.path

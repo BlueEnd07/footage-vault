@@ -1,5 +1,16 @@
 package com.footagevault.app
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -90,7 +101,6 @@ import com.footagevault.app.ui.ChangeDateDialog
 import com.footagevault.app.ui.DeleteDialog
 import com.footagevault.app.ui.DuplicatesScreen
 import com.footagevault.app.ui.isDark
-import com.footagevault.app.ui.shareItems
 import com.footagevault.app.ui.Filter
 import com.footagevault.app.ui.LibraryScreen
 import com.footagevault.app.ui.MapScreen
@@ -204,18 +214,19 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
         }
     }
     val tab = when (page) { Page.Videos -> 0; Page.Map -> 2; else -> 1 }
-    val shown: List<Item> = when (val p = page) {
+    fun shownFor(p: Page): List<Item> = when (p) {
         is Page.Album -> albums.firstOrNull { it.playlistId == p.pid }?.ytIds?.toSet().orEmpty().let { ids -> items.filter { it.ytId in ids } }
         is Page.Event -> events.firstOrNull { it.key == p.key }?.items.orEmpty().sortedByDescending { it.recorded }
         is Page.Filtered -> items.filter(p.f::test)
         else -> items
     }
+    val shown: List<Item> = shownFor(page)
     fun toggle(it: Item) { if (it.id in selected) selected.remove(it.id) else selected.add(it.id) }
     val selItems = items.filter { it.id in selected }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
-        topBar = {
+        topBar = { Crossfade(targetState = selecting, animationSpec = tween(180), label = "topbar") { selecting ->
             if (selecting) TopAppBar(
                 title = { Text("${selected.size} selected") },
                 navigationIcon = { IconButton(onClick = { selected.clear() }) { Icon(Icons.Filled.Close, "Cancel") } },
@@ -223,7 +234,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                 actions = {
                     val allFav = selItems.all { it.favorite }
                     IconButton(onClick = { vm.setFavorite(selected.toList(), !allFav); selected.clear() }) { Icon(Icons.Outlined.FavoriteBorder, "Favourite") }
-                    IconButton(onClick = { shareItems(ctx, selItems)?.let(vm::say); selected.clear() }) { Icon(Icons.Outlined.Share, "Share") }
+                    IconButton(onClick = { vm.share(selItems); selected.clear() }) { Icon(Icons.Outlined.Share, "Share") }
                     IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
                     IconButton(onClick = { redating = selItems }) { Icon(Icons.Outlined.EditCalendar, "Change date") }
                     IconButton(onClick = { deleting = selItems }) { Icon(Icons.Outlined.Delete, "Delete") }
@@ -256,17 +267,22 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                     IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, "Settings") }
                 },
             )
-        },
+        } },
         bottomBar = {
-            if (!selecting) NavigationBar {
+            AnimatedVisibility(visible = !selecting, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) { NavigationBar {
                 NavItem(tab == 0, Icons.Filled.VideoLibrary, Icons.Outlined.VideoLibrary, "Videos") { page = Page.Videos }
                 NavItem(tab == 1, Icons.Filled.PhotoLibrary, Icons.Outlined.PhotoLibrary, "Library") { page = Page.Library }
                 NavItem(tab == 2, Icons.Filled.Map, Icons.Outlined.Map, "Map") { page = Page.Map }
-            }
+            } }
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (val p = page) {
+            // Moving between screens: the new one fades and settles in, the old one fades out quickly.
+            AnimatedContent(targetState = page, label = "page", transitionSpec = {
+                (fadeIn(tween(220, delayMillis = 60)) + scaleIn(tween(220, delayMillis = 60), initialScale = 0.98f)) togetherWith fadeOut(tween(90))
+            }) { p ->
+            val shown = if (p == page) shown else shownFor(p)
+            when (p) {
                 Page.Library -> LibraryScreen(items, albums, events,
                     onFilter = { page = Page.Filtered(it) }, onAlbum = { page = Page.Album(it) },
                     onEvent = { page = Page.Event(it) }, onNewAlbum = { dialog = "newAlbum" },
@@ -280,7 +296,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                         onToggleDay = { day -> if (day.all { it.id in selected }) selected.removeAll(day.map { it.id }.toSet()) else day.forEach { if (it.id !in selected) selected.add(it.id) } },
                         header = {
                             item(span = { GridItemSpan(maxLineSpan) }) {
-                                Column {
+                                Column(Modifier.animateContentSize()) {
                                     update?.let { u ->
                                         val prog = updateProgress
                                         Notice(Icons.Outlined.SystemUpdate, "Update available: ${u.name}",
@@ -291,7 +307,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                     if (p is Page.Videos || (p is Page.Filtered && p.f == Filter.FREE)) {
                                         val free = vm.freeCandidates()
                                         if (free.isNotEmpty()) Notice(Icons.Outlined.DeleteSweep, "Free up ${BackupWorker.fmtSize(free.sumOf { it.size })}",
-                                            "${free.size} video${if (free.size == 1) " is" else "s are"} safely backed up to YouTube.", "Free up space") { vm.freeUpSpace() }
+                                            com.footagevault.app.data.safelyBackedUp(free), "Free up space") { vm.freeUpSpace() }
                                     }
                                     if (p is Page.Filtered && p.f == Filter.UPLOADING && shown.isNotEmpty()) {
                                         val (title, why) = vm.uploadState(items)
@@ -319,6 +335,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                         },
                     )
                 }
+            }
             }
         }
     }
@@ -399,7 +416,7 @@ private fun StatusPill(items: List<Item>, signedIn: Boolean, vm: AppViewModel, o
         failed > 0 -> Triple(Icons.Outlined.ErrorOutline, "$failed problem${if (failed == 1) "" else "s"}", onOpen)
         else -> Triple(Icons.Outlined.CloudDone, "Backed up", onOpen)
     }
-    Surface(onClick = action, shape = RoundedCornerShape(18.dp),
+    Surface(onClick = action, shape = RoundedCornerShape(18.dp), modifier = Modifier.animateContentSize(),
         color = if (up != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             if (icon == null) CircularProgressIndicator(progress = { up?.progress?.coerceAtLeast(.05f) ?: 0f }, modifier = Modifier.size(18.dp), strokeWidth = 2.5.dp)

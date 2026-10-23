@@ -1,5 +1,6 @@
 package com.footagevault.app.ui
 
+import androidx.compose.animation.animateContentSize
 import android.Manifest
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -196,7 +197,7 @@ private fun key(k: Int, content: @Composable () -> Unit) = androidx.compose.runt
 @Composable
 private fun Card(icon: ImageVector, title: String, content: @Composable () -> Unit) {
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(20.dp)) {
+        Column(Modifier.fillMaxWidth().animateContentSize().padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
                 Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(12.dp))

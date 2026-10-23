@@ -129,8 +129,16 @@ Videos already in Google Photos can be moved to YouTube through the share sheet:
 - **Swipe left/right** for the next or previous video (also inside the YouTube player). **Swipe down** to close.
 - **Double-tap** the left or right side to skip 10 seconds.
 - Long videos **resume** where you stopped.
-- The bottom bar has **Share**, **Favourite**, **Info** (date, place, size, backup status), **Add to** (album)
-  and **Delete**.
+- The bottom bar has **Share**, **Favourite**, **Edit** (photos), **Info** (date, place, size, backup status),
+  **Add to** (album) and **Delete**.
+- **Share** sends the files themselves: photos as images, videos as video files. Ones that are only in your backup
+  are fetched first. A video that lives only on YouTube is shared as its link.
+- **Photos:** pinch or double-tap to zoom. A photo that's only on Telegram shows its preview at once and sharpens when
+  the original has loaded; the photos next to it load ahead, so swiping is instant.
+- **Edit** (photos): **Crop** (free, original, 1:1, 4:5, 16:9, 9:16) and **Rotate**, **Adjust** (brightness,
+  contrast, saturation, warmth) and **Filters** (Vivid, Warm, Cool, B&W, Fade, Punch). **Save copy** saves a new
+  photo in the Camera folder with the same date and place, so it sits next to the original and is backed up too.
+  The original is never changed.
 - In the **YouTube player**, touch the screen to show ← back, **♡ Favourite** and **🗑 Delete** at the top.
 
 ## Deleting

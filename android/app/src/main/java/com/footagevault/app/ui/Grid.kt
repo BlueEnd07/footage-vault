@@ -273,8 +273,12 @@ fun Tile(item: Item, isSelected: Boolean, selecting: Boolean, compact: Boolean, 
             Text(fmtDur(item.durationMs), style = shadow)
             Icon(Icons.Outlined.PlayCircle, null, tint = Color.White, modifier = Modifier.padding(start = 2.dp).size(14.dp))
         }
-        if (item.favorite) Icon(Icons.Filled.Favorite, "Favourite", tint = Color.White,
-            modifier = Modifier.align(Alignment.BottomStart).padding(if (compact) 2.dp else 5.dp).size(if (compact) 12.dp else 16.dp))
+        androidx.compose.animation.AnimatedVisibility(item.favorite, Modifier.align(Alignment.BottomStart),
+            enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()) {
+            Icon(Icons.Filled.Favorite, "Favourite", tint = Color.White,
+                modifier = Modifier.padding(if (compact) 2.dp else 5.dp).size(if (compact) 12.dp else 16.dp))
+        }
         Badge(item, compact, Modifier.align(Alignment.BottomEnd).padding(if (compact) 2.dp else 5.dp))
         if (selecting) Icon(if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked, null,
             tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White,

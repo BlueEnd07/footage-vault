@@ -197,30 +197,35 @@ fun NameDialog(title: String, initial: String = "", confirm: String = "Save", on
 @Composable
 fun DeleteDialog(items: List<Item>, vm: AppViewModel, onDone: () -> Unit) {
     val onPhone = items.filter { it.onPhone && it.uri != null }
-    val onYouTube = items.filter { it.ytId != null }
-    val notBackedUp = onPhone.count { it.ytId == null }
-    val n = items.size
-    val what = if (n == 1) "this video" else "these $n videos"
+    val backedUp = items.filter { it.ytId != null || it.tgMsg != null }
+    val notBackedUp = onPhone.count { it.ytId == null && it.tgMsg == null }
+    val one = items.size == 1
+    val title = if (one) "Delete this ${if (items[0].isPhoto) "photo" else "video"}?" else "Delete ${com.footagevault.app.data.countWords(items)}?"
+    val them = if (one) "it" else "them"
     AlertDialog(
         onDismissRequest = onDone,
-        title = { Text(if (n == 1) "Delete video?" else "Delete $n videos?") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (onYouTube.isNotEmpty())
-                    Text("Delete everywhere removes $what from YouTube permanently. It can't be undone.")
-                if (onPhone.isNotEmpty() && onYouTube.isNotEmpty())
-                    Text("Delete from phone frees space and keeps the YouTube copy.")
+                if (backedUp.isNotEmpty() && onPhone.isNotEmpty()) {
+                    Text("Delete from phone frees up space. The backup stays.")
+                    Text("Delete everywhere removes $them for good. It can't be undone.")
+                } else if (backedUp.isNotEmpty()) Text("This removes $them for good. It can't be undone.")
                 if (notBackedUp > 0)
-                    Text("$notBackedUp ${if (notBackedUp == 1) "isn't" else "aren't"} backed up yet: deleting from the phone removes ${if (notBackedUp == 1) "it" else "them"} for good.",
+                    Text("$notBackedUp ${if (notBackedUp == 1) "isn't" else "aren't"} backed up yet, so ${if (notBackedUp == 1) "it's" else "they're"} gone for good once deleted.",
                         color = MaterialTheme.colorScheme.error)
             }
         },
         confirmButton = {
             Column(horizontalAlignment = Alignment.End) {
-                if (onYouTube.isNotEmpty()) TextButton(onClick = { vm.deleteEverywhere(items); onDone() }) {
-                    Text(if (onPhone.isEmpty()) "Delete from YouTube" else "Delete everywhere", color = MaterialTheme.colorScheme.error)
+                when {
+                    backedUp.isNotEmpty() && onPhone.isNotEmpty() -> {
+                        TextButton(onClick = { vm.removeFromPhone(onPhone); onDone() }) { Text("Delete from phone") }
+                        TextButton(onClick = { vm.deleteEverywhere(items); onDone() }) { Text("Delete everywhere", color = MaterialTheme.colorScheme.error) }
+                    }
+                    backedUp.isNotEmpty() -> TextButton(onClick = { vm.deleteEverywhere(items); onDone() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    onPhone.isNotEmpty() -> TextButton(onClick = { vm.removeFromPhone(onPhone); onDone() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
-                if (onPhone.isNotEmpty()) TextButton(onClick = { vm.removeFromPhone(onPhone); onDone() }) { Text("Delete from phone") }
                 TextButton(onClick = onDone) { Text("Cancel") }
             }
         },
