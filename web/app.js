@@ -63,7 +63,8 @@ const ring = (p) => `<svg class="ring" viewBox="0 0 20 20"><circle class="bg" cx
 function statusText(v) {
   switch (v.status) {
     case "new": return "Preparing preview";
-    case "queued": return status.connected ? (status.user_paused ? "Waiting · uploads paused" : "Waiting to upload") : "Waiting · YouTube not connected";
+    case "queued": if (v.missing) return `Waiting · file not found (is ${v.missing.slice(0, 2)} plugged in?)`;
+      return status.connected ? (status.user_paused ? "Waiting · uploads paused" : "Waiting to upload") : "Waiting · YouTube not connected";
     case "uploading": return `Uploading to YouTube · ${Math.round(v.progress * 100)}%`;
     case "uploaded": return "Uploaded · YouTube is processing";
     case "on_youtube": {
@@ -73,7 +74,7 @@ function statusText(v) {
     }
     case "done": return "Backed up · original deleted";
     case "hold": return "Backed up · original kept (a check failed)";
-    case "failed": return "Upload failed";
+    case "failed": return v.missing ? `Upload failed · file not found (is ${v.missing.slice(0, 2)} plugged in?)` : "Upload failed";
     case "youtube": return `On YouTube (${v.privacy || "uploaded directly"})`;
   }
   return v.status;
@@ -185,7 +186,7 @@ function tile(v) {
 function renderGallery() {
   const list = visible();
   let html = "", day = "", open = false;
-  for (const v of list) {
+  for (const v of isUploadPanel() ? [] : list) {
     const d = parseDate(v.recorded_at), k = dayKey(d);
     if (k !== day) {
       if (open) html += "</div>";
@@ -211,6 +212,7 @@ function renderGallery() {
   renderCounts();
   renderFreeBar();
   renderSubHeader();
+  renderUploads();
 }
 
 function renderCounts() {
@@ -263,6 +265,199 @@ function renderSubHeader() {
   on("namePerson", namePerson); on("mergePerson", mergePerson); on("hidePerson", hidePerson);
   on("freeBtn2", openFreeSheet);
 }
+
+// ---------- uploading dashboard ----------
+const isUploadPanel = () => view === "photos" && filter === "progress" && !(albumId || eventId || personId);
+const fmtRate = (b) => (b ? `${fmtSize(b)}/s` : "");
+function fmtLeft(sec) {
+  if (sec == null || !isFinite(sec)) return "";
+  if (sec < 60) return "under a minute";
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h >= 24) return `${Math.floor(h / 24)} d ${h % 24} h`;
+  return `${h} h${m % 60 ? ` ${m % 60} min` : ""}`;
+}
+const fmtWhen = (s) => parseDate(s).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+const fromLabel = (v) => (v.source === "phone" ? "from phone" : v.source === "youtube" ? "from Takeout" : "from this PC");
+const upThumb = (v) => (v.status !== "new" || v.youtube_id
+  ? `<img loading="lazy" src="/media/thumbs/${v.id}.jpg" alt="">` : `<span class="up-ph">${icon("movie")}</span>`);
+// The PC uploads the oldest recording first (worker: ORDER BY recorded_at).
+const uploadOrder = (a, b) => (a.recorded_at < b.recorded_at ? -1 : a.recorded_at > b.recorded_at ? 1 : a.id - b.id);
+const leftOf = (v) => (v.size || 0) * (1 - Math.min(1, v.progress || 0));
+
+let uploadNowId = null;
+function renderUploads() {
+  const box = $("#uploadPanel");
+  if (!isUploadPanel()) { box.hidden = true; return; }
+  const u = status.upload;
+  const cur = videos.find((v) => v.status === "uploading");
+  const queued = videos.filter((v) => v.status === "queued" && !v.missing).sort(uploadOrder);
+  // Their card / drive isn't plugged in (also failed ones, which used up their tries on it).
+  const missing = videos.filter((v) => v.missing && (v.status === "queued" || v.status === "failed")).sort(uploadOrder);
+  const missingFolders = [...new Set(missing.map((v) => v.missing))];
+  const drives = [...new Set(missingFolders.map((f) => f.slice(0, 2)))].join(", ");
+  const preparing = videos.filter((v) => v.status === "new").sort(uploadOrder);
+  const processing = videos.filter((v) => v.status === "uploaded");
+  const total = (cur ? 1 : 0) + queued.length + missing.length + preparing.length + processing.length;
+
+  // ---- what's left, and how long it should take at the current speed
+  const live = cur && u && u.id === cur.id;
+  const curLeft = cur ? (live ? Math.max(0, u.size - u.sent) : leftOf(cur)) : 0;
+  const bytesLeft = curLeft + [...queued, ...preparing].reduce((n, v) => n + leftOf(v), 0);
+  const speed = live ? u.speed || 0 : 0;
+  const toSend = (cur ? 1 : 0) + queued.length + preparing.length;
+  const moving = speed && status.connected && !status.user_paused && !status.paused_until;
+
+  // ---- page header: one status line + Pause / Resume, like the other filter pages
+  const sub = !total ? "Everything is backed up"
+    : [toSend ? `${plural(toSend, "video")} · ${fmtSize(bytesLeft)} left` : "",
+       toSend && moving ? `about ${fmtLeft(bytesLeft / speed)}` : "",
+       processing.length ? `${processing.length} processing on YouTube` : ""].filter(Boolean).join(" · ");
+  $("#albumSub").textContent = sub;
+  const canPause = status.connected && toSend;
+  const actions = canPause ? `<button class="btn ${status.user_paused ? "filled" : "tonal"}" id="upPause">${icon(status.user_paused ? "play_arrow" : "pause")}${status.user_paused ? "Resume" : "Pause"}</button>` : "";
+  const sa = $("#subActions");
+  if (sa.dataset.up !== actions || !!actions !== !!$("#upPause")) { sa.dataset.up = actions; sa.innerHTML = actions; }
+
+  box.hidden = total === 0;
+  if (!total) { box.innerHTML = ""; box.dataset.state = box.dataset.lists = ""; uploadNowId = null; bindUploadButtons([]); return; }
+
+  // ---- only when something needs attention or explains a wait: a standard notice card
+  let state = "";
+  if (!status.connected) state = notice("warn", "cloud_off", "Waiting for YouTube", "Uploads continue as soon as YouTube is connected again.");
+  else if (status.user_paused) state = notice("", "pause", cur ? "Pausing…" : "Uploads are paused",
+    cur ? "Stopping after the current piece. It continues from there when you resume." : "Nothing is lost: each video continues where it stopped.");
+  else if (status.paused_until) state = notice("warn", "schedule", "YouTube's daily upload limit reached", `Uploads continue by themselves at ${esc(status.paused_until.slice(-5))}.`);
+  else if (!cur && queued.length) state = notice("", "cloud_upload", "Starting the next upload…", "");
+  else if (!cur && missing.length && !preparing.length) state = notice("warn", "error", `Plug in ${esc(drives)} to continue`, "The videos left to upload are on a card or drive that isn't connected.");
+
+  // ---- lists
+  let ahead = curLeft;
+  const meta = (v) => `${fmtSize(v.size || 0)} · ${fmtDur(v.duration)} · ${esc(fmtWhen(v.recorded_at))}`;
+  const row = (v, trail, note = "") => `
+    <button class="up-row" data-id="${v.id}" title="${esc(v.name)}">
+      <span class="up-thumb">${upThumb(v)}</span>
+      <span class="up-info"><b>${esc(v.name)}</b><span>${meta(v)}</span>${note}</span>
+      <span class="up-trail">${trail}</span>
+    </button>`;
+  const failNote = (v) => (v.attempts && v.error
+    ? `<span class="up-note warn">${icon("error")}Try ${v.attempts + 1} of 3 · ${esc(v.error.slice(0, 120))}</span>` : "");
+  const MAX = 60;
+  const section = (title, hint, list, fn, action = "") => !list.length ? "" : `
+    <div class="up-sec"><div class="up-sec-text"><h3>${title}<em>${list.length}</em></h3>${hint ? `<span>${hint}</span>` : ""}</div>${action}</div>
+    <div class="up-list">${list.slice(0, MAX).map(fn).join("")}</div>
+    ${list.length > MAX ? `<p class="up-more">+ ${list.length - MAX} more</p>` : ""}`;
+
+  const st = status.upload_stats;
+  const done = st && st.count
+    ? `<p class="up-foot">${icon("cloud_done")}${plural(st.count, "video")} (${fmtSize(st.bytes)}) uploaded since ${parseDate(st.since).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</p>` : "";
+
+  const lists =
+    section("Up next", "Oldest recordings go first", queued, (v, i) => {
+      const startsIn = moving ? fmtLeft(ahead / speed) : "";
+      ahead += leftOf(v);
+      const resume = v.progress > 0 && v.progress < 1
+        ? `<span class="up-note">${icon("sync")}Continues from ${Math.floor(v.progress * 100)}%</span>` : "";
+      const trail = i === 0 && cur ? `<span class="up-tag">Next</span>` : startsIn ? `in ~${startsIn}` : "";
+      return row(v, trail, resume + failNote(v));
+    }) +
+    section("Can't find the file", `On ${esc(missingFolders.join(", "))}, which isn't connected. Plug it back in and these upload by themselves.`,
+      missing, (v) => row(v, `<span class="up-x" role="button" tabindex="0" data-remove="${v.id}" title="Remove from the vault">Remove</span>`,
+        `<span class="up-note warn">${icon("error")}File not found</span>`),
+      `<button class="btn text" id="upRemoveAll">Remove all</button>`) +
+    section("Preparing", "Making a preview and thumbnail first", preparing, (v) => row(v, "Preparing…")) +
+    section("Processing on YouTube", "Usually a few minutes, then it's backed up", processing, (v) => row(v, `${icon("sync")}Processing`)) +
+    done;
+
+  // Update in place so thumbnails don't flicker on every poll.
+  const stateEl = ensureChild(box, "upState");
+  if (box.dataset.state !== state) { box.dataset.state = state; stateEl.innerHTML = state; }
+  const nowEl = ensureChild(box, "upNow");
+  if (!cur) { nowEl.innerHTML = ""; uploadNowId = null; }
+  else if (uploadNowId !== cur.id || !nowEl.firstElementChild) { nowEl.innerHTML = nowCard(cur, u); uploadNowId = cur.id; }
+  else updateNowCard(nowEl, cur, u);
+  const listEl = ensureChild(box, "upLists");
+  if (box.dataset.lists !== lists) { box.dataset.lists = lists; listEl.innerHTML = lists; }
+  bindUploadButtons(missing);
+}
+function bindUploadButtons(missing) {
+  const ra = $("#upRemoveAll");
+  if (ra) ra.onclick = () => removeMissing(missing.map((v) => v.id));
+  const pb = $("#upPause");
+  if (pb) pb.onclick = async () => {
+    pb.disabled = true;
+    try { await api("/api/uploads/pause", { paused: !status.user_paused }); } catch (e) { toast(e.message); }
+    refresh();
+  };
+}
+function ensureChild(parent, id) {
+  let el = document.getElementById(id);
+  if (!el) { el = document.createElement("div"); el.id = id; parent.appendChild(el); }
+  return el;
+}
+function nowNumbers(cur, u) {
+  const live = u && u.id === cur.id;
+  const size = live ? u.size : cur.size || 0;
+  const sent = live ? u.sent : size * (cur.progress || 0);
+  const pct = size ? Math.min(100, sent / size * 100) : 0;
+  const left = live && u.speed ? `${fmtLeft(u.eta)} left · ${fmtRate(u.speed)}` : status.user_paused ? "Paused" : "Measuring speed…";
+  const notes = [];
+  if (live && u.idle > 45)
+    notes.push(`<span class="up-note warn">${icon("error")}No progress for ${u.idle < 60 ? `${u.idle} s` : fmtLeft(u.idle)}, retrying by itself</span>`);
+  if (live && u.resumed_from > 0 && u.size) {
+    const from = Math.floor(u.resumed_from / u.size * 100);
+    notes.push(`<span class="up-note">${icon("sync")}${from ? `Continued from ${from}%` : "Picked up where it stopped"}</span>`);
+  }
+  if (live && u.attempt > 1) notes.push(`<span class="up-note">${icon("refresh")}Try ${u.attempt} of 3</span>`);
+  return { pct, amount: `${fmtSize(sent)} of ${fmtSize(size)}`, left, notes: notes.join("") };
+}
+function nowCard(cur, u) {
+  const n = nowNumbers(cur, u);
+  return `
+    <div class="up-now">
+      <button class="up-now-thumb" data-id="${cur.id}" aria-label="Open ${esc(cur.name)}">${upThumb(cur)}</button>
+      <div class="up-now-body">
+        <div class="up-now-label">${icon("cloud_upload")}Uploading now</div>
+        <div class="up-now-name" title="${esc(cur.name)}">${esc(cur.name)}</div>
+        <div class="up-now-meta">${esc(fmtWhen(cur.recorded_at))} · ${fmtDur(cur.duration)} · ${fromLabel(cur)}</div>
+        <div class="up-now-pct"><b>${Math.floor(n.pct)}%</b><span class="up-left">${esc(n.left)}</span></div>
+        <div class="up-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(n.pct)}"><i style="width:${n.pct.toFixed(1)}%"></i></div>
+        <div class="up-now-line"><span class="up-amount">${esc(n.amount)}</span><span class="up-notes">${n.notes}</span></div>
+      </div>
+    </div>`;
+}
+function updateNowCard(el, cur, u) {
+  const n = nowNumbers(cur, u);
+  el.querySelector(".up-bar i").style.width = n.pct.toFixed(1) + "%";
+  el.querySelector(".up-bar").setAttribute("aria-valuenow", Math.floor(n.pct));
+  el.querySelector(".up-now-pct b").textContent = Math.floor(n.pct) + "%";
+  el.querySelector(".up-amount").textContent = n.amount;
+  el.querySelector(".up-left").textContent = n.left;
+  const notes = el.querySelector(".up-notes");
+  if (notes.dataset.html !== n.notes) { notes.dataset.html = n.notes; notes.innerHTML = n.notes; }
+}
+async function removeMissing(ids) {
+  const names = videos.filter((v) => ids.includes(v.id)).map((v) => v.name);
+  const what = ids.length === 1 ? `“${esc(names[0])}”` : plural(ids.length, "video");
+  if (!await confirmBox(`Remove ${what} from the vault?`,
+    "Their files can't be found and they never reached YouTube. They are only taken off this list: nothing on the card, " +
+    "the PC or YouTube is deleted. If you import the same card again later, they come back and upload.",
+    "Remove", true)) return;
+  try {
+    const { removed } = await api("/api/videos/remove-missing", { video_ids: ids });
+    toast(removed ? `Removed ${plural(removed, "video")}` : "Nothing removed (the files are back?)");
+  } catch (e) { toast(e.message); }
+  refresh();
+}
+$("#uploadPanel").addEventListener("click", (e) => {
+  const x = e.target.closest("[data-remove]");
+  if (x) { e.stopPropagation(); return removeMissing([+x.dataset.remove]); }
+  const r = e.target.closest("[data-id]");
+  if (!r) return;
+  const ids = [...new Set($$("#uploadPanel [data-id]").map((x) => +x.dataset.id))];
+  openViewer(+r.dataset.id, ids);
+});
 
 // ---------- library ----------
 const card = (attr, cover, name, sub, cls = "") => `
@@ -1063,12 +1258,16 @@ function renderPill() {
   else if (!status.connected) { cls = "warn"; ic = "cloud_off"; text = status.auth === "none" ? "Connect" : "Reconnect"; long = " YouTube"; act = connect; }
   else if (pending && status.user_paused) { ic = "pause"; text = `Paused`; long = ` · ${pending} left`; }
   else if (pending && status.paused_until) { cls = "warn"; ic = "schedule"; text = "Daily limit"; long = ` · resumes ${status.paused_until.slice(-5)}`; }
-  else if (pending) { cls = "busy"; ic = null; text = `${pending} left`; long = ""; act = () => setFilter("progress"); }
+  else if (pending) {
+    cls = "busy"; ic = null; text = `${pending} left`; act = () => setFilter("progress");
+    const u = status.upload;
+    long = u && u.size ? ` · ${Math.floor(u.sent / u.size * 100)}%${u.speed ? ` · ${fmtRate(u.speed)}` : ""}` : "";
+  }
   else if (problems) { cls = "bad"; ic = "error"; text = `${problems} problem${problems === 1 ? "" : "s"}`; act = () => setFilter("problems"); }
   else { cls = "ok"; }
   p.className = "pill " + cls;
   p.innerHTML = (ic ? icon(ic) : ring(up ? up.progress : 0.1)) + `<span>${text}</span><span class="lbl-long">${long}</span>`;
-  p.title = pending ? `Backing up ${plural(pending, "video")}` : text + long;
+  p.title = pending ? `Backing up ${plural(pending, "video")}. Click for details.` : text + long;
   p.onclick = act || openSettings;
   p.hidden = false;
   $("#railFoot").textContent = status.connected && !pending ? `${plural(videos.length, "video")} backed up` : "";
@@ -1099,6 +1298,13 @@ function renderNotices() {
     html += notice("bad", "error", `Problems with ${plural(problems, "video")}`, "Usually a network hiccup. Try them all again, or open one to see why.",
       `<button class="btn text" id="problemsShow">Show</button><button class="btn filled" id="retryAll">${icon("refresh")}Retry all</button>`);
   }
+  const lost = videos.filter((v) => (v.status === "queued" || v.status === "failed") && v.missing);
+  if (lost.length && status.connected) {
+    const drives = [...new Set(lost.map((v) => v.missing.slice(0, 2)))].join(", ");
+    html += notice("warn", "error", `${plural(lost.length, "video")} can't upload: ${esc(drives)} isn't connected`,
+      `They were imported from ${esc([...new Set(lost.map((v) => v.missing))].join(", "))}. Plug it back in and they upload by themselves; the other videos go first meanwhile.`,
+      `<button class="btn text" id="lostShow">Show</button><button class="btn text" id="lostRemove">Remove them</button>`);
+  }
   if (imp && imp.running) {
     html += notice("", "folder", `Importing ${esc(imp.folder)}`, `${imp.found} found · ${imp.added} added<div class="bar"><i style="width:${imp.found ? Math.min(100, (imp.added + imp.skipped) / imp.found * 100) : 5}%"></i></div>`);
   } else if (imp && status.local && importDismissed !== imp.folder + imp.found) {
@@ -1112,6 +1318,8 @@ function renderNotices() {
   if (box.innerHTML !== html) box.innerHTML = html;
   const bc = $("#bannerConnect"); if (bc) bc.onclick = connect;
   const ps = $("#problemsShow"); if (ps) ps.onclick = () => setFilter("problems");
+  const ls = $("#lostShow"); if (ls) ls.onclick = () => setFilter("progress");
+  const lr = $("#lostRemove"); if (lr) lr.onclick = () => removeMissing(lost.map((v) => v.id));
   const ra = $("#retryAll"); if (ra) ra.onclick = async () => {
     ra.disabled = true;
     try {
@@ -1146,9 +1354,14 @@ async function refresh() {
     events = eventsData;
     peopleInfo = peopleData;
     people = peopleInfo.people || [];
+    // The app was updated on the PC: load the new version, unless this device is still sending videos.
+    if (status.build && statusData.build && status.build !== statusData.build && !sending && !sendQueue.length) {
+      return location.reload();
+    }
     status = statusData;
     document.body.classList.toggle("remote", !status.local);
     render();
+    renderUploads();  // live speed / time left change on every poll, not only on database writes
     renderPill();
     renderNotices();
     if (selecting) updateSelBar();

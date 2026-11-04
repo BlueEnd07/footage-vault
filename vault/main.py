@@ -150,6 +150,9 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith("/static/") and request.url.path.endswith((".js", ".css")):
+        # Always check for a newer version (a cheap 304 when unchanged), so updates show up.
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
@@ -189,8 +192,8 @@ async def submit_pin(request: Request):
 
 @app.get("/api/videos")
 def list_videos():
-    return db.rows("""SELECT v.id, v.name, v.source, v.size, v.duration, v.width, v.height, v.recorded_at,
-                             v.status, v.progress, v.error, v.youtube_id, v.delete_after, v.deleted_at,
+    rows = db.rows("""SELECT v.id, v.name, v.source, v.size, v.duration, v.width, v.height, v.recorded_at,
+                             v.status, v.progress, v.error, v.attempts, v.youtube_id, v.delete_after, v.deleted_at,
                              v.phone_cleared_at, v.sync_path IS NOT NULL AS synced, v.lat, v.lon, v.place,
                              v.favorite, v.privacy,
                              (SELECT group_concat(DISTINCT f.person_id) FROM faces f JOIN persons p ON p.id = f.person_id
@@ -200,6 +203,13 @@ def list_videos():
                              (SELECT group_concat(av.album_id) FROM album_videos av
                                WHERE av.video_id = v.id AND av.removed = 0) AS albums
                       FROM videos v ORDER BY v.recorded_at DESC""")
+    missing = worker.missing_ids()
+    if missing:
+        paths = {r["id"]: r["path"] for r in db.rows("SELECT id, path FROM videos WHERE status IN ('queued', 'failed')")}
+        for r in rows:
+            if r["id"] in missing:
+                r["missing"] = str(Path(paths[r["id"]]).parent)  # e.g. F:\DCIM\DJI_001 on an unplugged card
+    return rows
 
 
 @app.get("/api/status")
@@ -214,6 +224,9 @@ def status(request: Request):
         "user_paused": worker.state["user_paused"],
         "paused_until": worker.state["paused_until"].strftime("%d %b %H:%M") if worker.state["paused_until"] else None,
         "pause_reason": worker.state["pause_reason"],
+        "upload": worker.upload_info(),
+        "upload_stats": {**worker.state["upload_stats"],
+                         "since": worker.state["upload_stats"]["since"].strftime("%Y-%m-%d %H:%M:%S")},
         "import": worker.state["import"],
         "counts": counts,
         "delete_after_days": s["delete_after_days"],
@@ -223,12 +236,17 @@ def status(request: Request):
         "youtube_only": db.row("SELECT COUNT(*) n FROM videos WHERE status='youtube'")["n"],
         "faces": faces.progress(),  # {checked, total, models_ok, ...}
         "rev": db.revision(),
+        "build": _build(),  # changes when the web app's files do, so open tabs reload
     }
     if is_local(request):
         out["lan_url"] = f"http://{lan_ip()}:{s['port']}"
         out["tailscale"] = tailscale_info()
         out["watch_folders"] = s.get("watch_folders") or []
     return out
+
+
+def _build() -> str:
+    return "-".join(str(int((STATIC / f).stat().st_mtime)) for f in ("index.html", "app.js", "style.css", "icons.js"))
 
 
 @app.get("/api/pin")
@@ -336,6 +354,18 @@ def set_favorite(vid: int, req: FavReq):
     return {"ok": True}
 
 
+class PauseReq(BaseModel):
+    paused: bool
+
+
+@app.post("/api/uploads/pause")
+def pause_uploads(req: PauseReq):
+    """Same switch as "Pause uploads" in the tray menu. A running upload stops after its current
+    chunk and later resumes where it left off."""
+    worker.state["user_paused"] = req.paused
+    return {"ok": True, "paused": req.paused}
+
+
 @app.post("/api/videos/retry-all")
 def retry_all():
     rows = db.rows("SELECT id, status FROM videos WHERE status IN ('failed', 'hold')")
@@ -358,9 +388,11 @@ def _retry(vid: int, status: str):
         # Re-run the safety checks now.
         db.run("UPDATE videos SET status='on_youtube', error=NULL, delete_after=? WHERE id=?", (db.now(), vid))
     elif not (PREVIEWS / f"{vid}.mp4").exists():
-        db.run("UPDATE videos SET status='new', error=NULL, attempts=0 WHERE id=?", (vid,))
+        db.run("UPDATE videos SET status='new', error=NULL, attempts=0, progress=0 WHERE id=?", (vid,))
     else:
-        db.run("UPDATE videos SET status='queued', error=NULL, attempts=0, youtube_id=NULL WHERE id=?", (vid,))
+        # A failed upload's session was already dropped, so it starts again from 0 %.
+        db.run("UPDATE videos SET status='queued', error=NULL, attempts=0, progress=0, youtube_id=NULL WHERE id=?",
+               (vid,))
 
 
 # ---------- free up space on the phone ----------
@@ -405,6 +437,16 @@ def delete_forever(req: DeleteReq):
             req.video_ids):
         raise HTTPException(503, "YouTube isn't connected, so the YouTube copy can't be deleted. Reconnect first.")
     return worker.delete_forever(req.video_ids, req.delete_copies)
+
+
+class MissingReq(BaseModel):
+    video_ids: list[int] | None = None  # None: every video whose file can't be found
+
+
+@app.post("/api/videos/remove-missing")
+def remove_missing(req: MissingReq):
+    """Removes not-yet-uploaded videos whose file is gone from the vault (not from disk or YouTube)."""
+    return {"removed": worker.remove_missing(req.video_ids)}
 
 
 @app.post("/api/free-space/mark")
@@ -699,4 +741,9 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    # Version the app's own files, so a browser never mixes an old cached copy with a new one.
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    v = _build()
+    for f in ("app.js", "icons.js", "style.css"):
+        html = html.replace(f'"/static/{f}"', f'"/static/{f}?v={v}"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})

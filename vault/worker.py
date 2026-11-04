@@ -29,6 +29,8 @@ state = {
     "takeout": None,         # progress of "Import YouTube Takeout"
     "yt_import": None,       # result of the last pull from YouTube
     "yt_import_now": False,  # "Sync from YouTube" button
+    "upload": None,          # live stats of the upload in progress (see _upload_one)
+    "upload_stats": {"since": datetime.now(), "count": 0, "bytes": 0},  # finished since the app started
 }
 _import_lock = threading.Lock()
 
@@ -466,8 +468,52 @@ def _pause_for_quota() -> None:
                       f"Uploads continue automatically at {state['paused_until']:%H:%M}.")
 
 
+def upload_info() -> dict | None:
+    """Snapshot of the upload in progress for the web app: bytes, speed and time left."""
+    up = state["upload"]
+    if not up:
+        return None
+    now = time.time()
+    speed = up["speed"]
+    left = max(0, up["size"] - up["sent"])
+    return {
+        "id": up["id"], "size": up["size"], "sent": up["sent"],
+        "speed": round(speed) if speed else None,               # bytes per second, smoothed
+        "eta": round(left / speed) if speed else None,           # seconds
+        "elapsed": round(now - up["started"]),
+        "idle": round(now - up["updated"]),                      # seconds since the last chunk went through
+        "resumed_from": up["resumed_from"],                      # bytes already sent before this run
+        "attempt": up["attempt"],
+    }
+
+
+def next_upload() -> dict | None:
+    """Oldest queued video whose file can be read. Videos imported from a card or drive that has
+    since been unplugged are skipped (without using up their tries) until it's back."""
+    for v in db.rows("SELECT * FROM videos WHERE status='queued' ORDER BY recorded_at, id"):
+        if os.path.exists(v["path"]):
+            return v
+    return None
+
+
+def missing_ids() -> set[int]:
+    """Videos still to upload whose file isn't there right now."""
+    return {v["id"] for v in db.rows("SELECT id, path FROM videos WHERE status IN ('queued', 'failed')")
+            if not os.path.exists(v["path"])}
+
+
 def _upload_one(v: dict):
     db.run("UPDATE videos SET status='uploading', error=NULL WHERE id=?", (v["id"],))
+    try:
+        size = os.path.getsize(v["path"])
+    except OSError:
+        size = int(v.get("size") or 0)
+    start_offset = int(v.get("upload_offset") or 0) if v.get("upload_url") else 0
+    up = state["upload"] = {
+        "id": v["id"], "size": size, "sent": start_offset, "speed": None,
+        "started": time.time(), "updated": time.time(), "resumed_from": start_offset,
+        "attempt": int(v.get("attempts") or 0) + 1,
+    }
     recorded = datetime.strptime(v["recorded_at"], "%Y-%m-%d %H:%M:%S")
     title = f"{recorded:%Y-%m-%d %H:%M} · {Path(v['name']).stem}"
     title = title.replace("<", "").replace(">", "")[:100]
@@ -483,16 +529,27 @@ def _upload_one(v: dict):
 
     def save_offset(offset):
         db.run("UPDATE videos SET upload_offset=? WHERE id=?", (offset, v["id"]))
+        now = time.time()
+        sent, dt = offset - up["sent"], now - up["updated"]
+        if sent > 0 and dt > 0:
+            rate = sent / dt
+            up["speed"] = rate if up["speed"] is None else 0.6 * up["speed"] + 0.4 * rate
+        up["sent"], up["updated"] = offset, now
 
     keep_awake(True)
     try:
         vid = youtube.upload(v["path"], title, f"Original file: {v['name']}",
                              recorded.astimezone().isoformat(), progress,
                              session=v.get("upload_url"), offset=int(v.get("upload_offset") or 0),
-                             on_session=save_session, on_offset=save_offset)
+                             on_session=save_session, on_offset=save_offset,
+                             should_stop=lambda: state["user_paused"])
         db.run("""UPDATE videos SET status='uploaded', youtube_id=?, progress=1,
                   upload_url=NULL, upload_offset=0 WHERE id=?""", (vid, v["id"]))
+        state["upload_stats"]["count"] += 1
+        state["upload_stats"]["bytes"] += size - start_offset
         notify.clear_alert("quota")
+    except youtube.Stopped:
+        db.run("UPDATE videos SET status='queued' WHERE id=?", (v["id"],))
     except youtube.QuotaExceeded:
         # The session stays valid, so the upload picks up where it stopped after the reset.
         db.run("UPDATE videos SET status='queued' WHERE id=?", (v["id"],))
@@ -507,6 +564,7 @@ def _upload_one(v: dict):
             notify.event("failed")
         time.sleep(30)
     finally:
+        state["upload"] = None
         keep_awake(False)
 
 
@@ -661,6 +719,33 @@ def delete_forever(ids: list[int], delete_copies: bool) -> dict:
         db.run("DELETE FROM videos WHERE id=?", (vid,))
         deleted += 1
     return {"deleted": deleted, "skipped": skipped}
+
+
+def remove_missing(ids: list[int] | None = None) -> int:
+    """Drops videos that never reached YouTube and whose file is gone (e.g. imported from a card
+    that's no longer around). Nothing on disk or YouTube is touched, and no tombstone is left,
+    so importing the same files again later adds them back."""
+    gone = missing_ids()
+    if ids is not None:
+        gone &= set(ids)
+    removed = 0
+    for vid in gone:
+        v = db.row("SELECT youtube_id, status FROM videos WHERE id=?", (vid,))
+        if not v or v["youtube_id"] or v["status"] not in ("queued", "failed"):
+            continue
+        for p in (THUMBS / f"{vid}.jpg", PREVIEWS / f"{vid}.mp4"):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError as e:
+                log.warning("Could not delete %s: %s", p, e)
+        try:
+            faces.forget_video(vid)
+        except Exception:
+            log.exception("Could not forget faces for video %s", vid)
+        db.run("DELETE FROM album_videos WHERE video_id=?", (vid,))
+        db.run("DELETE FROM videos WHERE id=?", (vid,))
+        removed += 1
+    return removed
 
 
 def mark_phone_cleared(ids: list[int]) -> None:
@@ -898,7 +983,7 @@ def _youtube_loop():
                 time.sleep(30)
                 continue
             state["paused_until"] = state["pause_reason"] = None
-            v = db.row("SELECT * FROM videos WHERE status='queued' ORDER BY recorded_at LIMIT 1")
+            v = next_upload()
             if v and not _already_on_youtube(v):
                 _upload_one(v)
             else:

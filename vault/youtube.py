@@ -191,9 +191,13 @@ def _probe_session(request, session: str, size: int):
     raise HttpError(resp, content, uri=session)
 
 
+class Stopped(Exception):
+    """Upload paused by the user between chunks."""
+
+
 def upload(path: str, title: str, description: str, recorded_iso: str, on_progress,
            session: str | None = None, offset: int = 0,
-           on_session=None, on_offset=None) -> str:
+           on_session=None, on_offset=None, should_stop=None) -> str:
     """Resumable upload as a private video. Returns the YouTube video id.
 
     A session URI and offset can be passed back after a restart; the server is
@@ -224,6 +228,8 @@ def upload(path: str, title: str, description: str, recorded_iso: str, on_progre
 
     response, failures = None, 0
     while response is None:
+        if should_stop and should_stop():
+            raise Stopped()  # the session stays valid; the next run continues from the saved offset
         try:
             status, response = request.next_chunk()
             failures = 0
