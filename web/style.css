@@ -247,6 +247,13 @@ body.scrolled .appbar { background: var(--surface); }
 .up-panel { display: grid; gap: 8px; margin: 4px 0 24px; }
 .up-panel > div:empty { display: none; }
 #upState, #upLists { display: grid; gap: 8px; }
+#upNow { display: grid; gap: 8px; }
+/* several uploads at once: smaller cards so they all fit */
+#upNow.several .up-now { gap: 20px; padding: 12px 20px 12px 12px; }
+#upNow.several .up-now-thumb { width: 176px; }
+#upNow.several .up-now-name { font-size: 18px; line-height: 24px; }
+#upNow.several .up-now-pct { margin-top: 8px; }
+#upNow.several .up-now-pct b { font-size: 22px; }
 
 /* the video uploading right now */
 .up-now { display: flex; align-items: center; gap: 24px; padding: 16px 24px 16px 16px; border-radius: var(--radius); background: var(--surface-1); }
@@ -306,6 +313,9 @@ body.scrolled .appbar { background: var(--surface); }
   .up-now-thumb { width: 100%; aspect-ratio: 2.4; }
   .up-now-name { font-size: 18px; line-height: 24px; }
   .up-now-pct b { font-size: 24px; }
+  #upNow.several .up-now { flex-direction: row; align-items: center; gap: 12px; }
+  #upNow.several .up-now-thumb { width: 96px; aspect-ratio: 16 / 9; }
+  #upNow.several .up-now-meta { display: none; }
   .up-row { gap: 12px; padding: 8px 12px 8px 8px; }
   .up-thumb { width: 80px; }
   .up-info > span:not(.up-note) { font-size: 12px; }

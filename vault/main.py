@@ -224,7 +224,7 @@ def status(request: Request):
         "user_paused": worker.state["user_paused"],
         "paused_until": worker.state["paused_until"].strftime("%d %b %H:%M") if worker.state["paused_until"] else None,
         "pause_reason": worker.state["pause_reason"],
-        "upload": worker.upload_info(),
+        "uploads": worker.upload_info(),  # one entry per video uploading right now
         "upload_stats": {**worker.state["upload_stats"],
                          "since": worker.state["upload_stats"]["since"].strftime("%Y-%m-%d %H:%M:%S")},
         "import": worker.state["import"],

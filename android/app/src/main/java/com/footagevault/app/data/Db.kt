@@ -71,6 +71,12 @@ data class Item(
         else thumb?.let { java.io.File(it) } ?: ytId?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
 }
 
+/** Progress of several uploads together, weighted by file size (the phone sends a few at once). */
+fun combinedProgress(items: List<Item>): Float {
+    val size = items.sumOf { it.size.coerceAtLeast(1) }
+    return if (size == 0L) 0f else (items.sumOf { (it.progress * it.size.coerceAtLeast(1)).toDouble() } / size).toFloat()
+}
+
 class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", null, 4) {
 
     private val _version = MutableStateFlow(0L)

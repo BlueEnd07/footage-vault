@@ -286,12 +286,14 @@ const upThumb = (v) => (v.status !== "new" || v.youtube_id
 const uploadOrder = (a, b) => (a.recorded_at < b.recorded_at ? -1 : a.recorded_at > b.recorded_at ? 1 : a.id - b.id);
 const leftOf = (v) => (v.size || 0) * (1 - Math.min(1, v.progress || 0));
 
-let uploadNowId = null;
+// Live stats of an upload in progress (the PC sends a few at once), by video id.
+const liveUpload = (id) => (status.uploads || []).find((u) => u.id === id);
+let uploadNowIds = "";
 function renderUploads() {
   const box = $("#uploadPanel");
   if (!isUploadPanel()) { box.hidden = true; return; }
-  const u = status.upload;
-  const cur = videos.find((v) => v.status === "uploading");
+  const curs = videos.filter((v) => v.status === "uploading").sort(uploadOrder);
+  const cur = curs[0];
   const queued = videos.filter((v) => v.status === "queued" && !v.missing).sort(uploadOrder);
   // Their card / drive isn't plugged in (also failed ones, which used up their tries on it).
   const missing = videos.filter((v) => v.missing && (v.status === "queued" || v.status === "failed")).sort(uploadOrder);
@@ -299,14 +301,13 @@ function renderUploads() {
   const drives = [...new Set(missingFolders.map((f) => f.slice(0, 2)))].join(", ");
   const preparing = videos.filter((v) => v.status === "new").sort(uploadOrder);
   const processing = videos.filter((v) => v.status === "uploaded");
-  const total = (cur ? 1 : 0) + queued.length + missing.length + preparing.length + processing.length;
+  const total = curs.length + queued.length + missing.length + preparing.length + processing.length;
 
-  // ---- what's left, and how long it should take at the current speed
-  const live = cur && u && u.id === cur.id;
-  const curLeft = cur ? (live ? Math.max(0, u.size - u.sent) : leftOf(cur)) : 0;
+  // ---- what's left, and how long it should take at the current (combined) speed
+  const curLeft = curs.reduce((n, v) => { const u = liveUpload(v.id); return n + (u ? Math.max(0, u.size - u.sent) : leftOf(v)); }, 0);
   const bytesLeft = curLeft + [...queued, ...preparing].reduce((n, v) => n + leftOf(v), 0);
-  const speed = live ? u.speed || 0 : 0;
-  const toSend = (cur ? 1 : 0) + queued.length + preparing.length;
+  const speed = curs.reduce((n, v) => n + ((liveUpload(v.id) || {}).speed || 0), 0);
+  const toSend = curs.length + queued.length + preparing.length;
   const moving = speed && status.connected && !status.user_paused && !status.paused_until;
 
   // ---- page header: one status line + Pause / Resume, like the other filter pages
@@ -321,13 +322,13 @@ function renderUploads() {
   if (sa.dataset.up !== actions || !!actions !== !!$("#upPause")) { sa.dataset.up = actions; sa.innerHTML = actions; }
 
   box.hidden = total === 0;
-  if (!total) { box.innerHTML = ""; box.dataset.state = box.dataset.lists = ""; uploadNowId = null; bindUploadButtons([]); return; }
+  if (!total) { box.innerHTML = ""; box.dataset.state = box.dataset.lists = ""; uploadNowIds = ""; bindUploadButtons([]); return; }
 
   // ---- only when something needs attention or explains a wait: a standard notice card
   let state = "";
   if (!status.connected) state = notice("warn", "cloud_off", "Waiting for YouTube", "Uploads continue as soon as YouTube is connected again.");
   else if (status.user_paused) state = notice("", "pause", cur ? "Pausing…" : "Uploads are paused",
-    cur ? "Stopping after the current piece. It continues from there when you resume." : "Nothing is lost: each video continues where it stopped.");
+    cur ? `Stopping after the current piece${curs.length > 1 ? " of each" : ""}. It continues from there when you resume.` : "Nothing is lost: each video continues where it stopped.");
   else if (status.paused_until) state = notice("warn", "schedule", "YouTube's daily upload limit reached", `Uploads continue by themselves at ${esc(status.paused_until.slice(-5))}.`);
   else if (!cur && queued.length) state = notice("", "cloud_upload", "Starting the next upload…", "");
   else if (!cur && missing.length && !preparing.length) state = notice("warn", "error", `Plug in ${esc(drives)} to continue`, "The videos left to upload are on a card or drive that isn't connected.");
@@ -374,9 +375,11 @@ function renderUploads() {
   const stateEl = ensureChild(box, "upState");
   if (box.dataset.state !== state) { box.dataset.state = state; stateEl.innerHTML = state; }
   const nowEl = ensureChild(box, "upNow");
-  if (!cur) { nowEl.innerHTML = ""; uploadNowId = null; }
-  else if (uploadNowId !== cur.id || !nowEl.firstElementChild) { nowEl.innerHTML = nowCard(cur, u); uploadNowId = cur.id; }
-  else updateNowCard(nowEl, cur, u);
+  const ids = curs.map((v) => v.id).join(",");
+  nowEl.classList.toggle("several", curs.length > 1);
+  if (uploadNowIds !== ids || nowEl.children.length !== curs.length) {
+    nowEl.innerHTML = curs.map((v) => nowCard(v, liveUpload(v.id))).join(""); uploadNowIds = ids;
+  } else curs.forEach((v, i) => updateNowCard(nowEl.children[i], v, liveUpload(v.id)));
   const listEl = ensureChild(box, "upLists");
   if (box.dataset.lists !== lists) { box.dataset.lists = lists; listEl.innerHTML = lists; }
   bindUploadButtons(missing);
@@ -1260,8 +1263,10 @@ function renderPill() {
   else if (pending && status.paused_until) { cls = "warn"; ic = "schedule"; text = "Daily limit"; long = ` · resumes ${status.paused_until.slice(-5)}`; }
   else if (pending) {
     cls = "busy"; ic = null; text = `${pending} left`; act = () => setFilter("progress");
-    const u = status.upload;
-    long = u && u.size ? ` · ${Math.floor(u.sent / u.size * 100)}%${u.speed ? ` · ${fmtRate(u.speed)}` : ""}` : "";
+    const ups = status.uploads || [];
+    const size = ups.reduce((n, u) => n + u.size, 0), sent = ups.reduce((n, u) => n + u.sent, 0);
+    const rate = ups.reduce((n, u) => n + (u.speed || 0), 0);
+    long = size ? ` · ${Math.floor(sent / size * 100)}%${rate ? ` · ${fmtRate(rate)}` : ""}` : "";
   }
   else if (problems) { cls = "bad"; ic = "error"; text = `${problems} problem${problems === 1 ? "" : "s"}`; act = () => setFilter("problems"); }
   else { cls = "ok"; }

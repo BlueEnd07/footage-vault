@@ -2,6 +2,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 
 from google.auth.exceptions import RefreshError
@@ -56,6 +57,7 @@ def has_client_secret() -> bool:
 
 
 _auth = {"state": "none"}  # none | ok | expired | scope
+_refresh_lock = threading.Lock()  # several uploads run at once; refresh the token once, not per thread
 
 
 def auth_state() -> str:
@@ -75,15 +77,20 @@ def credentials() -> Credentials | None:
         _auth["state"] = "scope"
         return None
     if not creds.valid:
-        try:
-            creds.refresh(Request())
-        except RefreshError:
-            _auth["state"] = "expired"
-            return None
-        except Exception:  # no internet right now; not a login problem
-            _auth["state"] = "offline"
-            return None
-        _write_token(creds.to_json())
+        with _refresh_lock:
+            fresh = Credentials.from_authorized_user_file(str(TOKEN_PATH))
+            if fresh.valid:  # another thread refreshed it while this one waited
+                creds = fresh
+            else:
+                try:
+                    creds.refresh(Request())
+                except RefreshError:
+                    _auth["state"] = "expired"
+                    return None
+                except Exception:  # no internet right now; not a login problem
+                    _auth["state"] = "offline"
+                    return None
+                _write_token(creds.to_json())
     _auth["state"] = "ok"
     return creds
 

@@ -27,6 +27,10 @@ import com.footagevault.app.net.YouTube
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import org.json.JSONObject
 
@@ -94,63 +98,113 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         try { uploadLoop(sync, yt, refreshToken) } finally { uploading.unlock() }
     }
 
-    private suspend fun uploadLoop(sync: Sync, yt: YouTube, refreshToken: suspend () -> Unit) {
-        while (!isStopped) {
-            val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND $YOUTUBE", order = "recorded ASC").firstOrNull() ?: return
-            val left = db.items("status IN ('queued','uploading') AND on_phone=1 AND $YOUTUBE").size
-            val title = "Backing up · $left left"
-            val shown = tryForeground(title, it.name)
-            db.update(it.id, "status" to "uploading", "error" to null)
-            suspend fun finished(result: JSONObject) {
-                val vid = result.getString("id")
-                val privacy = result.optJSONObject("status")?.optString("privacyStatus")
-                if (prefs.privacy == "unlisted" && privacy == "private") prefs.forcedPrivate = true
-                db.update(it.id, "status" to "processing", "yt_id" to vid, "upload_url" to null, "progress" to 1f, "privacy" to privacy)
-            }
-            try {
-                refreshToken()
-                var session = it.uploadUrl
-                var start = 0L
-                if (session != null) {
-                    when (val state = yt.probeUpload(session, it.size)) {
-                        is YouTube.UploadState.Resume -> start = state.offset
-                        is YouTube.UploadState.Complete -> { finished(state.video); continue }
-                        YouTube.UploadState.Expired -> {
-                            session = null
-                            db.update(it.id, "upload_url" to null)
+    /**
+     * Uploads [PARALLEL_UPLOADS] videos side by side. YouTube takes each upload at only about 35 Mbit/s, so on a
+     * fast connection one at a time leaves most of it unused.
+     */
+    private suspend fun uploadLoop(sync: Sync, yt: YouTube, refreshToken: suspend () -> Unit) = coroutineScope {
+        val lock = Any()
+        val busy = mutableSetOf<Long>()          // being uploaded by a lane right now
+        val skip = mutableSetOf<Long>()          // failed in this run: tried again on the next run, not straight away
+        val live = ConcurrentHashMap<Long, Pair<String, LongArray>>()  // id -> name, [sent, size]
+        var quota = false
+        var shown = false
+        var title = "Backing up"
+        var lastShown = -1  // percent and number of videos last shown
+
+        fun showProgress() {
+            if (!shown) return
+            val all = live.values.toList()
+            if (all.isEmpty()) return
+            val sent = all.sumOf { it.second[0] }
+            val size = all.sumOf { it.second[1] }.coerceAtLeast(1)
+            val pct = (sent * 100 / size).toInt().coerceIn(0, 100)
+            val text = if (all.size == 1) "${all[0].first} -  $pct%" else "${all.size} videos at once -  $pct%"
+            val key = pct * 100 + all.size  // only when the numbers shown change
+            synchronized(lock) { if (key == lastShown) return; lastShown = key }
+            setForegroundAsync(foreground(title, text, pct))
+        }
+
+        suspend fun lane() {
+            while (!isStopped && !quota) {
+                val it = synchronized(lock) {
+                    db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND $YOUTUBE", order = "recorded ASC")
+                        .firstOrNull { c -> c.id !in busy && c.id !in skip }
+                        ?.also { c ->
+                            busy += c.id
+                            db.update(c.id, "status" to "uploading", "error" to null)
+                            title = "Backing up · ${db.items("status IN ('queued','uploading') AND on_phone=1 AND $YOUTUBE").size} left"
+                        }
+                } ?: return
+                if (!shown) shown = tryForeground(title, it.name)
+                suspend fun finished(result: JSONObject) {
+                    val vid = result.getString("id")
+                    val privacy = result.optJSONObject("status")?.optString("privacyStatus")
+                    if (prefs.privacy == "unlisted" && privacy == "private") prefs.forcedPrivate = true
+                    db.update(it.id, "status" to "processing", "yt_id" to vid, "upload_url" to null, "progress" to 1f, "privacy" to privacy)
+                }
+                try {
+                    refreshToken()
+                    var session = it.uploadUrl
+                    var start = 0L
+                    var done: JSONObject? = null
+                    if (session != null) {
+                        when (val state = yt.probeUpload(session, it.size)) {
+                            is YouTube.UploadState.Resume -> start = state.offset
+                            is YouTube.UploadState.Complete -> done = state.video
+                            YouTube.UploadState.Expired -> {
+                                session = null
+                                db.update(it.id, "upload_url" to null)
+                            }
                         }
                     }
-                }
-                if (session == null) {
-                    session = yt.startUpload(sync.uploadMeta(it), it.size)
-                    db.update(it.id, "upload_url" to session)
-                }
-                var lastPct = -1
-                val result = yt.uploadFrom(session, applicationContext.contentResolver, Uri.parse(it.uri), it.size, start) { sent ->
-                    val pct = (sent * 100 / it.size).toInt()
-                    if (pct != lastPct) {
-                        lastPct = pct
-                        db.update(it.id, "progress" to sent.toFloat() / it.size)
-                        if (shown) setForegroundAsync(foreground(title, "${it.name} -  $pct%", pct))
+                    if (done == null) {
+                        if (session == null) {
+                            session = yt.startUpload(sync.uploadMeta(it), it.size)
+                            db.update(it.id, "upload_url" to session)
+                        }
+                        val progress = longArrayOf(start, it.size)
+                        live[it.id] = it.name to progress
+                        var lastItemPct = -1
+                        done = yt.uploadFrom(session, applicationContext.contentResolver, Uri.parse(it.uri), it.size, start) { sent ->
+                            progress[0] = sent
+                            val pct = (sent * 100 / it.size).toInt()
+                            if (pct != lastItemPct) {
+                                lastItemPct = pct
+                                db.update(it.id, "progress" to sent.toFloat() / it.size)
+                                showProgress()
+                            }
+                        }
                     }
+                    finished(done)
+                } catch (e: ApiException) {
+                    if (e.isQuota) {
+                        db.update(it.id, "status" to "queued")
+                        prefs.pausedUntil = nextQuotaReset()
+                        quota = true  // the other lanes stop after the video they're on
+                        return
+                    }
+                    if (e.code == 404 || e.code == 410) db.update(it.id, "upload_url" to null)  // session expired: start over
+                    fail(it.id, it.attempts, e.message)
+                    synchronized(lock) { skip += it.id }
+                } catch (e: java.io.FileNotFoundException) {
+                    db.update(it.id, "status" to "failed", "error" to "The file is no longer on the phone")
+                } catch (e: CancellationException) {
+                    // Stopped by Android, or another lane lost the network: keep the session, resume next time.
+                    db.update(it.id, "status" to "queued", "error" to null)
+                    throw e
+                } catch (e: Exception) {
+                    // Network dropped: keep the session, resume next time.
+                    db.update(it.id, "status" to "queued", "error" to if (isStopped) null else (e.message ?: "Network problem"))
+                    throw e
+                } finally {
+                    live.remove(it.id)
+                    synchronized(lock) { busy -= it.id }
                 }
-                finished(result)
-            } catch (e: ApiException) {
-                if (e.isQuota) {
-                    db.update(it.id, "status" to "queued")
-                    prefs.pausedUntil = nextQuotaReset()
-                    return
-                }
-                if (e.code == 404 || e.code == 410) db.update(it.id, "upload_url" to null)  // session expired: start over
-                fail(it.id, it.attempts, e.message)
-            } catch (e: java.io.FileNotFoundException) {
-                db.update(it.id, "status" to "failed", "error" to "The file is no longer on the phone")
-            } catch (e: Exception) {
-                // Network dropped: keep the session, resume next time.
-                db.update(it.id, "status" to "queued", "error" to if (isStopped) null else (e.message ?: "Network problem"))
-                throw e
             }
         }
+
+        repeat(PARALLEL_UPLOADS) { launch { lane() } }
     }
 
     private suspend fun telegramUploads() {
@@ -232,6 +286,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         private const val PERIODIC = "backup-periodic"
         private const val NOW = "backup-now"
         private val uploading = Mutex()
+        /** YouTube uploads at once (each one is held to about 35 Mbit/s by YouTube). */
+        private const val PARALLEL_UPLOADS = 3
         private val tgUploading = Mutex()
         /** Rows that go to YouTube (older rows have no store yet). */
         private const val YOUTUBE = "(store IS NULL OR store='youtube')"

@@ -3,6 +3,7 @@ package com.footagevault.app.net
 import android.content.ContentResolver
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -236,6 +237,7 @@ class YouTube(private val token: suspend () -> String) {
             }
             val buf = ByteArray(chunk.toInt())
             while (true) {
+                ensureActive()  // stop between chunks when the backup is cancelled; the session resumes later
                 val n = readFully(input, buf)
                 if (n <= 0 && pos < size) throw IOException("File ended early")
                 val end = pos + n - 1

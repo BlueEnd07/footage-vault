@@ -29,10 +29,12 @@ state = {
     "takeout": None,         # progress of "Import YouTube Takeout"
     "yt_import": None,       # result of the last pull from YouTube
     "yt_import_now": False,  # "Sync from YouTube" button
-    "upload": None,          # live stats of the upload in progress (see _upload_one)
+    "uploads": {},           # video id -> live stats of each upload in progress (see _upload_one)
     "upload_stats": {"since": datetime.now(), "count": 0, "bytes": 0},  # finished since the app started
 }
 _import_lock = threading.Lock()
+_claim_lock = threading.Lock()  # upload slots pick their next video one at a time
+_retry_after: dict[int, float] = {}  # video id -> time.time() before which a failed upload isn't retried
 
 
 def keep_awake(on: bool) -> None:
@@ -468,11 +470,12 @@ def _pause_for_quota() -> None:
                       f"Uploads continue automatically at {state['paused_until']:%H:%M}.")
 
 
-def upload_info() -> dict | None:
-    """Snapshot of the upload in progress for the web app: bytes, speed and time left."""
-    up = state["upload"]
-    if not up:
-        return None
+def upload_info() -> list[dict]:
+    """Snapshot of the uploads in progress for the web app: bytes, speed and time left."""
+    return [_upload_snapshot(up) for up in list(state["uploads"].values())]
+
+
+def _upload_snapshot(up: dict) -> dict:
     now = time.time()
     speed = up["speed"]
     left = max(0, up["size"] - up["sent"])
@@ -490,7 +493,10 @@ def upload_info() -> dict | None:
 def next_upload() -> dict | None:
     """Oldest queued video whose file can be read. Videos imported from a card or drive that has
     since been unplugged are skipped (without using up their tries) until it's back."""
+    now = time.time()
     for v in db.rows("SELECT * FROM videos WHERE status='queued' ORDER BY recorded_at, id"):
+        if _retry_after.get(v["id"], 0) > now:
+            continue  # failed a moment ago; give the network a breather (other slots move on)
         if os.path.exists(v["path"]):
             return v
     return None
@@ -502,14 +508,25 @@ def missing_ids() -> set[int]:
             if not os.path.exists(v["path"])}
 
 
+def _claim_upload() -> dict | None:
+    """Next video for a free upload slot, marked 'uploading' so no other slot takes it."""
+    with _claim_lock:
+        while True:
+            v = next_upload()
+            if not v:
+                return None
+            if not _already_on_youtube(v):
+                db.run("UPDATE videos SET status='uploading', error=NULL WHERE id=?", (v["id"],))
+                return v
+
+
 def _upload_one(v: dict):
-    db.run("UPDATE videos SET status='uploading', error=NULL WHERE id=?", (v["id"],))
     try:
         size = os.path.getsize(v["path"])
     except OSError:
         size = int(v.get("size") or 0)
     start_offset = int(v.get("upload_offset") or 0) if v.get("upload_url") else 0
-    up = state["upload"] = {
+    up = state["uploads"][v["id"]] = {
         "id": v["id"], "size": size, "sent": start_offset, "speed": None,
         "started": time.time(), "updated": time.time(), "resumed_from": start_offset,
         "attempt": int(v.get("attempts") or 0) + 1,
@@ -562,9 +579,10 @@ def _upload_one(v: dict):
                (status, attempts, str(e)[:500], v["id"]))
         if status == "failed":
             notify.event("failed")
-        time.sleep(30)
+        else:
+            _retry_after[v["id"]] = time.time() + 30
     finally:
-        state["upload"] = None
+        state["uploads"].pop(v["id"], None)
         keep_awake(False)
 
 
@@ -937,6 +955,8 @@ def import_from_youtube() -> dict:
 
 # ---------- main YouTube loop ----------
 
+MAX_UPLOAD_SLOTS = 6  # upper bound for the "parallel_uploads" setting
+
 def _youtube_loop():
     last_check = 0.0
     last_import = 0.0
@@ -976,20 +996,41 @@ def _youtube_loop():
                 except Exception:
                     log.exception("YouTube import failed")
             _sync_albums()
-            if state["user_paused"]:
+            time.sleep(3)
+        except Exception:
+            log.exception("YouTube loop error")
+            time.sleep(30)
+
+
+def _upload_slot(slot: int):
+    """One upload at a time per slot. YouTube limits each upload to about 35 Mbit/s, so
+    several slots running side by side fill more of the connection."""
+    while True:
+        try:
+            if slot >= max(1, int(load_settings().get("parallel_uploads") or 1)):
+                time.sleep(10)  # slot switched off in settings
+                continue
+            if state["user_paused"] or not youtube.credentials():
                 time.sleep(3)
                 continue
-            if state["paused_until"] and datetime.now() < state["paused_until"]:
-                time.sleep(30)
-                continue
-            state["paused_until"] = state["pause_reason"] = None
-            v = next_upload()
-            if v and not _already_on_youtube(v):
-                _upload_one(v)
+            if state["paused_until"]:
+                if datetime.now() < state["paused_until"]:
+                    time.sleep(30)
+                    continue
+                state["paused_until"] = state["pause_reason"] = None
+            v = _claim_upload()
+            if v:
+                try:
+                    _upload_one(v)
+                except BaseException:
+                    # Don't leave it marked 'uploading' where no slot would pick it up again.
+                    db.run("UPDATE videos SET status='queued' WHERE id=? AND status='uploading'", (v["id"],))
+                    state["uploads"].pop(v["id"], None)
+                    raise
             else:
                 time.sleep(3)
         except Exception:
-            log.exception("YouTube loop error")
+            log.exception("Upload slot %d error", slot)
             time.sleep(30)
 
 
@@ -1002,3 +1043,5 @@ def start():
     faces.start()
     for fn in (_media_loop, _youtube_loop, _watch_loop):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()
+    for slot in range(MAX_UPLOAD_SLOTS):
+        threading.Thread(target=_upload_slot, args=(slot,), daemon=True, name=f"upload_{slot}").start()

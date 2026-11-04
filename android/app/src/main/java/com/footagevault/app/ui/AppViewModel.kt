@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.footagevault.app.data.Db
 import com.footagevault.app.data.Item
+import com.footagevault.app.data.combinedProgress
 import com.footagevault.app.data.MediaScanner
 import com.footagevault.app.data.Prefs
 import com.footagevault.app.data.Router
@@ -109,7 +110,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Why videos haven't uploaded yet, in plain words (Uploading page). */
     fun uploadState(items: List<Item>): Pair<String, String> {
         val pending = items.filter { it.isPending }
-        val up = pending.firstOrNull { it.status == "uploading" }
+        val ups = pending.filter { it.status == "uploading" }
+        val up = ups.firstOrNull()
         val waiting = pending.count { it.status != "processing" }
         val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
@@ -132,6 +134,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 "Copying from Google Photos" to "${c.done} of ${c.total} copied (${BackupWorker.fmtSize(c.bytes)} of ${BackupWorker.fmtSize(c.totalBytes)}). " +
                     "Uploads start when all are copied. You can close the app."
             }
+            ups.size > 1 -> "Backing up ${ups.size} videos at once" to "${(combinedProgress(ups) * 100).toInt()}% · $waiting left"
             up != null -> "Backing up ${up.name}" to "${(up.progress * 100).toInt()}% · $waiting left"
             waiting == 0 -> "Finishing up" to "${pending.size} uploaded and being finished. Long videos can take a while."
             !online -> "No internet" to "Uploads start when the phone is online."

@@ -30,6 +30,8 @@ DEFAULTS = {
     "watch_folders": [],  # [{"path": ..., "source": "phone" | "pc"}], checked every 15 s
     "autostart_initialized": False,
     "event_gap_hours": 3,  # clips closer together than this form one event
+    # YouTube caps each upload at roughly 35 Mbit/s, so sending a few at once uses more of the line.
+    "parallel_uploads": 3,
 }
 
 log = logging.getLogger("vault")

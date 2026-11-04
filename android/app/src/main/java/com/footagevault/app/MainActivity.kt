@@ -100,6 +100,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.footagevault.app.data.Item
+import com.footagevault.app.data.combinedProgress
 import com.footagevault.app.net.Auth
 import com.footagevault.app.ui.AlbumPicker
 import com.footagevault.app.ui.AppViewModel
@@ -504,7 +505,8 @@ private fun Notice(icon: ImageVector, title: String, text: String, action: Strin
 private fun StatusPill(items: List<Item>, signedIn: Boolean, vm: AppViewModel, onSignIn: () -> Unit, onOpen: () -> Unit) {
     val pending = items.count { it.isPending }
     val failed = items.count { it.status == "failed" }
-    val up = items.firstOrNull { it.status == "uploading" }
+    val ups = items.filter { it.status == "uploading" }
+    val up = ups.firstOrNull()
     val (icon, text, action) = when {
         !signedIn -> Triple(Icons.Outlined.CloudOff, "Sign in", onSignIn)
         vm.prefs.userPaused && pending > 0 -> Triple(Icons.Outlined.PauseCircle, "Paused", onOpen)
@@ -517,7 +519,7 @@ private fun StatusPill(items: List<Item>, signedIn: Boolean, vm: AppViewModel, o
     Surface(onClick = action, shape = RoundedCornerShape(18.dp), modifier = Modifier.animateContentSize(),
         color = if (up != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (icon == null) CircularProgressIndicator(progress = { up?.progress?.coerceAtLeast(.05f) ?: 0f }, modifier = Modifier.size(18.dp), strokeWidth = 2.5.dp)
+            if (icon == null) CircularProgressIndicator(progress = { if (up != null) combinedProgress(ups).coerceAtLeast(.05f) else 0f }, modifier = Modifier.size(18.dp), strokeWidth = 2.5.dp)
             else Icon(icon, null, Modifier.size(18.dp), tint = if (text == "Backed up") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(6.dp))
             Text(text, style = MaterialTheme.typography.labelLarge)
