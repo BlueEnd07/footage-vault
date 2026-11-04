@@ -26,3 +26,4 @@ android/.gradle/
 # Built app files
 *.apk
 /dist/
+signing-lineage.bin

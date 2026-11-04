@@ -88,6 +88,25 @@ $apksigner = Get-ChildItem (Join-Path $sdk "build-tools") -Directory -ErrorActio
     Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName "apksigner.bat" } |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $apksigner) { Fail "apksigner not found. Is the Android SDK installed?" }
+
+# 0. Key rotation: installs from before 1.14.1 carry the debug key. Re-sign with the old key plus the
+#    release key and the lineage that links them (APK Signature Scheme v3), so they update in place.
+if ($props["lineageFile"]) {
+    $lineage = $props["lineageFile"]
+    if (-not [IO.Path]::IsPathRooted($lineage)) { $lineage = Join-Path $android $lineage }
+    $oldStore = $props["oldStoreFile"]
+    if (-not (Test-Path $lineage)) { Fail "Signing lineage not found: $lineage (see docs\release.md)" }
+    if (-not $oldStore -or -not (Test-Path $oldStore)) { Fail "Old (debug) signing key not found: $oldStore" }
+    $ErrorActionPreference = "Continue"
+    $signOut = (& $apksigner sign --rotation-min-sdk-version 28 `
+        --ks $oldStore --ks-key-alias $props["oldKeyAlias"] --ks-pass "pass:$($props['oldStorePassword'])" --key-pass "pass:$($props['oldKeyPassword'])" `
+        --next-signer --ks $store --ks-key-alias $props["keyAlias"] --ks-pass "pass:$($props['storePassword'])" --key-pass "pass:$($props['keyPassword'])" `
+        --lineage $lineage $apk 2>&1) -join "`n"
+    $signExit = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($signExit -ne 0) { Fail "Re-signing with the key lineage failed: $signOut" }
+    Ok "signed with key rotation (debug key -> release key)"
+}
 # Native tools write warnings to stderr; don't let PowerShell treat that as a failure.
 $ErrorActionPreference = "Continue"
 $certs = (& $apksigner verify --print-certs $apk 2>&1) -join "`n"

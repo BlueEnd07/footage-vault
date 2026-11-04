@@ -33,9 +33,21 @@ keyPassword=CHANGE_ME
 3. SHA-1: `49:AA:78:6F:93:FF:A7:98:DB:F5:B5:04:BF:E8:8D:A2:1D:45:A5:BE`
    (verify with `keytool -list -v -keystore android/footage-vault-release.jks -alias footagevault`).
 4. Keep the existing Android client (debug SHA-1) too, so development builds can still sign in.
-5. Existing installs were signed with the debug key, so updating to a release-signed APK needs a one-time
-   uninstall/reinstall. Their videos stay on YouTube; reconnecting Google is enough after reinstalling, and choosing
-   **Only new videos** avoids uploading old ones again.
+5. Installs from before 1.14.1 were signed with the debug key. They update in place through **key rotation** (below).
+
+## Key rotation (debug key → release key)
+
+1.14 was signed with the release key alone, and phones refused it ("package conflicts with an existing package").
+Since 1.14.1 every release carries a signing lineage (APK Signature Scheme v3) that proves the debug key handed over
+to the release key, so any old install can update.
+
+- `android/signing-lineage.bin` (ignored by git) was made once with
+  `apksigner rotate --out signing-lineage.bin --old-signer --ks <debug.keystore> --new-signer --ks footage-vault-release.jks`.
+- `keystore.properties` points to it and to the old key:
+  `lineageFile`, `oldStoreFile` (`%USERPROFILE%\.android\debug.keystore`), `oldStorePassword`, `oldKeyAlias`,
+  `oldKeyPassword` (`android` / `androiddebugkey` / `android`).
+- The release script re-signs the APK with both keys and the lineage (`--rotation-min-sdk-version 28`).
+- **Back up the lineage file and this PC's debug keystore** with the release key.
 
 ## Building and publishing
 
