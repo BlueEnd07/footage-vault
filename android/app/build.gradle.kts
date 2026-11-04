@@ -22,8 +22,8 @@ android {
         applicationId = "com.footagevault.app"
         minSdk = 30          // Android 11+: one-tap system delete (MediaStore.createDeleteRequest)
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.14.1"
+        versionCode = 26
+        versionName = "1.15"
         // Telegram's engine (TDLib) is native code: only the 64-bit ARM build that phones use, to keep the app small.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -55,6 +55,8 @@ android {
     }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    // Screenshot tests (UiShots) run on the PC under Robolectric and need the app's resources.
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
@@ -89,6 +91,11 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.json:json:20240303")
+    // Screenshots of the real screens on the PC, no phone needed: .\gradlew :app:testDebugUnitTest --tests com.footagevault.app.UiShots
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.work:work-testing:2.10.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

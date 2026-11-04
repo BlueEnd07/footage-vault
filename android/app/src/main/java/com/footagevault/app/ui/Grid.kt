@@ -189,13 +189,17 @@ fun VideoGrid(
                 val list = segs.flatMap { seg -> when (seg) { is Seg.Plain -> seg.items; is Seg.Block -> listOf(seg.big) + seg.small } }
                 item(key = "h$key", span = { GridItemSpan(maxLineSpan) }) {
                     val all = selecting && list.all { it.id in selected }
-                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = if (months) 20.dp else 18.dp, bottom = 8.dp),
+                    // While selecting, the day's circle gets a full 40dp touch area; the row starts earlier so it lines up the same.
+                    Row(Modifier.fillMaxWidth().padding(start = if (selecting) 7.dp else 16.dp, end = 12.dp,
+                        top = if (selecting) 9.dp else if (months) 20.dp else 18.dp, bottom = if (selecting) 0.dp else 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         if (selecting) {
-                            Icon(if (all) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked, "Select",
-                                tint = if (all) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(22.dp).clip(CircleShape).clickable { onToggleDay(list) })
-                            Spacer(Modifier.width(10.dp))
+                            Box(Modifier.size(40.dp).clip(CircleShape).clickable { onToggleDay(list) }, contentAlignment = Alignment.Center) {
+                                Icon(if (all) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked, "Select day",
+                                    tint = if (all) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp))
+                            }
+                            Spacer(Modifier.width(1.dp))
                         }
                         if (key is YearMonth) Text(monthFmt.format(key), style = MaterialTheme.typography.titleMedium)
                         else Text(dayLabel(key as LocalDate), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)

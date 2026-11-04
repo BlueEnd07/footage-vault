@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +43,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -78,7 +79,7 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
         if (uris.isNotEmpty()) ctx.startActivity(importIntent(ctx, uris))
     }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         TopAppBar(title = { Text("Settings") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 12.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             key(tick) {
@@ -90,11 +91,12 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                         }
                         Spacer(Modifier.width(16.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(if (signedIn) p.channelTitle ?: "YouTube channel" else "Not signed in", fontWeight = FontWeight.Medium)
+                            Text(if (signedIn) p.channelTitle ?: "YouTube channel" else "Not signed in", fontWeight = FontWeight.Medium,
+                                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(if (signedIn) "Backing up to this channel" else "Sign in to start backing up",
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (signedIn) OutlinedButton(onClick = { vm.signOut(); tick++ }) { Text("Sign out") }
+                        if (signedIn) TextButton(onClick = { vm.signOut(); tick++ }) { Text("Sign out") }
                         else Button(onClick = vm::signIn) { Text("Sign in") }
                     }
                 }
@@ -201,7 +203,8 @@ private fun key(k: Int, content: @Composable () -> Unit) = androidx.compose.runt
 
 @Composable
 private fun Card(icon: ImageVector, title: String, content: @Composable () -> Unit) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+    // Tinted cards on the plain page: the sections stand apart in light, dark and pure black alike.
+    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().animateContentSize().padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
                 Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
@@ -251,41 +254,50 @@ fun Onboarding(vm: AppViewModel, onDone: () -> Unit) {
     }
     val existing = remember(granted) { if (granted) MediaScanner.countToBackUp(ctx, vm.prefs.folders, 0L) else 0 }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(48.dp))
-        Image(painterResource(R.drawable.ic_logo), null, Modifier.size(88.dp))
-        Spacer(Modifier.height(20.dp))
+    val stepNow = when { step == 0 -> 0; !signedIn -> 1; else -> 2 }
+    // Logo and promise in the middle; the question and its buttons at the bottom, where the thumb is.
+    Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 28.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Spacer(Modifier.weight(1f))
+        Image(painterResource(R.drawable.ic_logo), null, Modifier.size(96.dp))
+        Spacer(Modifier.height(24.dp))
         Text("Footage Vault", style = MaterialTheme.typography.headlineMedium)
         Text("Your videos, backed up to your own YouTube channel. Free up space on your phone, and keep watching here.",
-            textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 36.dp))
+            style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp))
+        Spacer(Modifier.weight(1.2f))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 20.dp)) {
+            for (i in 0..2) Surface(shape = CircleShape, color = if (i <= stepNow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.size(width = if (i == stepNow) 24.dp else 8.dp, height = 8.dp)) {}
+        }
         when {
             step == 0 -> {
-                Text("First, allow access to your videos.", textAlign = TextAlign.Center)
+                Text("First, allow access to your videos.", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
                 if (denied) {
                     Text("Access is needed to find your videos. If Android doesn't ask again, allow it in Settings → Apps → Footage Vault → Permissions.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
                 }
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = { perms.launch(Permissions.request()) }, modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = { perms.launch(Permissions.request()) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                     Text(if (denied) "Try again" else "Allow access")
                 }
             }
             !signedIn -> {
-                Text("Now sign in with the Google account that owns your YouTube channel.", textAlign = TextAlign.Center)
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = vm::signIn, modifier = Modifier.fillMaxWidth()) { Text("Sign in with Google") }
+                Text("Now sign in with the Google account that owns your YouTube channel.", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = vm::signIn, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Sign in with Google") }
             }
             else -> {
-                Text("Back up the $existing video${if (existing == 1) "" else "s"} already in your Camera folder?", textAlign = TextAlign.Center)
+                Text(if (existing == 0) "Back up videos you already have?" else "Back up the $existing video${if (existing == 1) "" else "s"} already in your Camera folder?",
+                    style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
                 Text("Videos already on your channel are recognised and not uploaded again.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = { vm.prefs.backupFrom = 0L; vm.prefs.onboarded = true; vm.settingsChanged(); onDone() }, modifier = Modifier.fillMaxWidth()) {
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = { vm.prefs.backupFrom = 0L; vm.prefs.onboarded = true; vm.settingsChanged(); onDone() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                     Text("Back up everything")
                 }
                 OutlinedButton(onClick = { vm.prefs.backupFrom = System.currentTimeMillis(); vm.prefs.onboarded = true; vm.settingsChanged(); onDone() },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Only new videos from now on") }
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(52.dp)) { Text("Only new videos from now on") }
             }
         }
     }

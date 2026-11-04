@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -51,10 +52,12 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.EditCalendar
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.LibraryAdd
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.PauseCircle
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -234,7 +237,8 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
         snackbarHost = { SnackbarHost(snack) },
         topBar = { Crossfade(targetState = selecting, animationSpec = tween(180), label = "topbar") { selecting ->
             if (selecting) TopAppBar(
-                title = { Text("${selected.size} selected") },
+                // Just the number, like Google Photos: five actions plus a long title don't fit a phone's width.
+                title = { Text("${selected.size}", maxLines = 1) },
                 navigationIcon = { IconButton(onClick = { selected.clear() }) { Icon(Icons.Filled.Close, "Cancel") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 actions = {
@@ -246,14 +250,18 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                         else { vm.share(selItems); selected.clear() }
                     }) { Icon(Icons.Outlined.Share, "Share") }
                     IconButton(onClick = { picker = selItems }) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
-                    IconButton(onClick = { redating = selItems }) { Icon(Icons.Outlined.EditCalendar, "Change date") }
                     IconButton(onClick = { deleting = selItems }) { Icon(Icons.Outlined.Delete, "Delete") }
                     var more by remember { mutableStateOf(false) }
-                    IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, "More") }
-                    DropdownMenu(more, { more = false }) {
-                        val priv = selItems.count { it.ytId != null && it.privacy == "private" }
-                        DropdownMenuItem(text = { Text(if (priv > 0) "Make unlisted ($priv)" else "Make unlisted") }, enabled = priv > 0,
-                            onClick = { more = false; vm.makeUnlisted(selItems); selected.clear() })
+                    Box {
+                        IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, "More") }
+                        DropdownMenu(more, { more = false }) {
+                            DropdownMenuItem(text = { Text("Change date") }, leadingIcon = { Icon(Icons.Outlined.EditCalendar, null) },
+                                onClick = { more = false; redating = selItems })
+                            val priv = selItems.count { it.ytId != null && it.privacy == "private" }
+                            DropdownMenuItem(text = { Text(if (priv > 0) "Make unlisted ($priv)" else "Make unlisted") }, enabled = priv > 0,
+                                leadingIcon = { Icon(Icons.Outlined.Link, null) },
+                                onClick = { more = false; vm.makeUnlisted(selItems); selected.clear() })
+                        }
                     }
                 },
             )
@@ -266,7 +274,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                             is Page.Filtered -> p.f.title
                             is Page.Duplicates -> "Duplicates"
                             else -> ""
-                        }, maxLines = 1)
+                        }, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         else -> Row(verticalAlignment = Alignment.CenterVertically) {
                             Image(painterResource(R.drawable.ic_logo), null, Modifier.size(28.dp))
                             Spacer(Modifier.width(10.dp))
@@ -280,8 +288,22 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                         IconButton(onClick = { page = Page.Library }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
-                    StatusPill(items, signedIn, vm, onSignIn = vm::signIn, onOpen = { page = Page.Filtered(Filter.UPLOADING) })
-                    IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, "Settings") }
+                    // Backup status and settings on the three main tabs; a page inside Library keeps the room for its title.
+                    if (page is Page.Videos || page is Page.Library || page is Page.Map) {
+                        StatusPill(items, signedIn, vm, onSignIn = vm::signIn, onOpen = { page = Page.Filtered(Filter.UPLOADING) })
+                        IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, "Settings") }
+                    } else if (page is Page.Album) {
+                        var more by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, "More") }
+                            DropdownMenu(more, { more = false }) {
+                                DropdownMenuItem(text = { Text("Rename") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                    onClick = { more = false; dialog = "rename" })
+                                DropdownMenuItem(text = { Text("Delete album") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                    onClick = { more = false; dialog = "deleteAlbum" })
+                            }
+                        }
+                    }
                 },
             )
         } },
@@ -320,7 +342,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                             if (prog != null) "Downloading… ${(prog * 100).toInt()}%" else u.notes.lines().firstOrNull { it.isNotBlank() } ?: "Tap Update to install it.",
                                             if (prog != null) "…" else "Update") { if (prog == null) vm.installUpdate() }
                                     }
-                                    if (!signedIn) Notice(Icons.Outlined.CloudOff, "Sign in to start backing up", "Your videos stay on the phone until then.", "Sign in", vm::signIn)
+                                    if (!signedIn) Notice(Icons.Outlined.CloudOff, "Sign in to start backing up", "Your videos stay on the phone until then.", "Sign in", onAction = vm::signIn)
                                     if (p is Page.Videos || (p is Page.Filtered && p.f == Filter.FREE)) {
                                         val free = vm.freeCandidates()
                                         if (free.isNotEmpty()) Notice(Icons.Outlined.DeleteSweep, "Free up ${BackupWorker.fmtSize(free.sumOf { it.size })}",
@@ -328,24 +350,23 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                     }
                                     if (signedIn && (p is Page.Videos || (p is Page.Filtered && p.f == Filter.PROBLEMS))) {
                                         val failed = items.count(Filter.PROBLEMS::test)
-                                        if (failed > 0) Notice(Icons.Outlined.ErrorOutline,
+                                        if (failed > 0) Notice(Icons.Outlined.ErrorOutline, error = true, title =
                                             if (failed == 1) "1 video didn't back up" else "$failed videos didn't back up",
-                                            "Usually a network hiccup. Try them all again.", "Retry all") { vm.retryAll() }
+                                            text = "Usually a network hiccup. Try them all again.", action = "Retry all") { vm.retryAll() }
                                     }
                                     if (p is Page.Filtered && p.f == Filter.UPLOADING && shown.isNotEmpty()) {
                                         val (title, why) = vm.uploadState(items)
                                         Notice(Icons.Outlined.CloudUpload, title, why, "Back up now") { vm.backUpNow() }
                                     }
                                     when (p) {
-                                        is Page.Album -> Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        // What's in it on the left, the one main action on the right; rename/delete are in ⋮.
+                                        is Page.Album -> PageHead(com.footagevault.app.data.countWords(shown), "Private YouTube playlist") {
                                             Button(onClick = { vm.shareAlbum(p.pid) }) {
                                                 Icon(Icons.Outlined.Share, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Share")
                                             }
-                                            FilledTonalButton(onClick = { dialog = "rename" }) { Text("Rename") }
-                                            TextButton(onClick = { dialog = "deleteAlbum" }) { Text("Delete album") }
                                         }
-                                        is Page.Event -> Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                                            Button(onClick = { dialog = "saveEvent" }) { Text("Save as album") }
+                                        is Page.Event -> PageHead(com.footagevault.app.data.countWords(shown), "Clips less than 3 hours apart") {
+                                            FilledTonalButton(onClick = { dialog = "saveEvent" }) { Text("Save as album") }
                                         }
                                         else -> {}
                                     }
@@ -445,19 +466,35 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
 private fun androidx.compose.foundation.layout.RowScope.NavItem(sel: Boolean, on: ImageVector, off: ImageVector, label: String, onClick: () -> Unit) =
     NavigationBarItem(selected = sel, onClick = onClick, icon = { Icon(if (sel) on else off, null) }, label = { Text(label) })
 
+/** Top of an album or event: a count and a line about it, with its main action beside them. */
 @Composable
-private fun Notice(icon: ImageVector, title: String, text: String, action: String, onAction: () -> Unit) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(title, fontWeight = FontWeight.Medium)
-                    Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun PageHead(title: String, sub: String, action: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        action()
+    }
+}
+
+/** A card above the grid: what happened, and the one thing to do about it. Problems are tinted red. */
+@Composable
+private fun Notice(icon: ImageVector, title: String, text: String, action: String, error: Boolean = false, onAction: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Surface(shape = RoundedCornerShape(20.dp), color = if (error) c.errorContainer.copy(alpha = .55f) else c.surfaceContainer,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.Top) {
+            Icon(icon, null, tint = if (error) c.error else c.primary, modifier = Modifier.padding(top = 2.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(text, style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
+                TextButton(onClick = onAction, modifier = Modifier.offset(x = (-12).dp)) {
+                    Text(action, color = if (error) c.error else c.primary)
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) { FilledTonalButton(onClick = onAction) { Text(action) } }
         }
     }
 }

@@ -109,6 +109,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
@@ -302,6 +303,7 @@ fun ViewerScreen(
                     .navigationBarsPadding().padding(vertical = 6.dp).alpha(1f - drag * 3f),
                 horizontalArrangement = Arrangement.SpaceAround,
             ) {
+                Spacer(Modifier.width(4.dp))
                 BarButton(Icons.Outlined.Share, "Share") { vm.share(listOf(live)) }
                 BarButton(if (live.favorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, "Favourite",
                     if (live.favorite) Color(0xFFF28B82) else Color.White) { vm.setFavorite(listOf(live.id), !live.favorite) }
@@ -313,8 +315,9 @@ fun ViewerScreen(
                     }
                 }
                 BarButton(Icons.Outlined.Info, "Info") { showInfo = true }
-                BarButton(Icons.Outlined.LibraryAdd, "Add to") { onAddToAlbum(live) }
+                BarButton(Icons.Outlined.LibraryAdd, "Album") { onAddToAlbum(live) }
                 BarButton(Icons.Outlined.Delete, "Delete") { onDelete(live) }
+                Spacer(Modifier.width(4.dp))
             }
         }
 
@@ -347,11 +350,16 @@ private fun lerp(a: Rect, b: Rect, t: Float) = Rect(
 )
 
 @Composable
-private fun BarButton(icon: ImageVector, label: String, tint: Color = Color.White, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = Color.Transparent, shape = MaterialTheme.shapes.large) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+private fun androidx.compose.foundation.layout.RowScope.BarButton(icon: ImageVector, label: String, tint: Color = Color.White, onClick: () -> Unit) {
+    // Equal slots, one-line labels: up to six actions fit a small phone. Labels grow with the phone's text size
+    // only up to 110% (the icon carries the full name for TalkBack), so they never wrap mid-word.
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val size = (11f * minOf(fontScale, 1.1f) / fontScale).sp
+    Surface(onClick = onClick, color = Color.Transparent, shape = MaterialTheme.shapes.large, modifier = Modifier.weight(1f)) {
+        Column(Modifier.padding(horizontal = 2.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, label, tint = tint)
-            Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall)
+            Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall.copy(fontSize = size, lineHeight = size * 1.4f),
+                maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
         }
     }
 }

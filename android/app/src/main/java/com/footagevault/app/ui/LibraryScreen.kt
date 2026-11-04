@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,11 +91,20 @@ fun LibraryScreen(
             Triple(Filter.PROBLEMS, Icons.Outlined.ErrorOutline, items.count(Filter.PROBLEMS::test)),
         )
         items(utils, key = { it.first.name }) { (f, icon, n) -> UtilityTile(f.title, icon, n) { onFilter(f) } }
-        item(key = "dupes") { UtilityTile("Duplicates", Icons.Outlined.ContentCopy, duplicates, onDuplicates) }
+        // Only when there are some: an empty fifth tile would sit alone on its own row.
+        if (duplicates > 0) item(key = "dupes") { UtilityTile("Duplicates", Icons.Outlined.ContentCopy, duplicates, onDuplicates) }
 
         if (events.isNotEmpty()) {
             item(span = { GridItemSpan(2) }) { SectionHead("Events", "Clips less than 3 hours apart") }
-            items(events, key = { it.key }) { e -> CoverCard(e.cover.thumbModel, e.name, "${e.items.size} clips") { onEvent(e.key) } }
+            // One swipeable row, so albums still show on the first screen however many events there are.
+            item(span = { GridItemSpan(2) }, key = "events") {
+                androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp), modifier = Modifier.bleed(12.dp)) {
+                    items(events, key = { it.key }) { e ->
+                        Box(Modifier.width(148.dp)) { CoverCard(e.cover.thumbModel, e.name, "${e.items.size} clips") { onEvent(e.key) } }
+                    }
+                }
+            }
         }
         item(span = { GridItemSpan(2) }) { SectionHead("Albums", "Each album is a private YouTube playlist") }
         item(key = "new") {
@@ -114,14 +124,25 @@ fun LibraryScreen(
     }
 }
 
+/** Widens a grid item past the grid's side padding, so a row of cards scrolls in from the screen edges. */
+private fun Modifier.bleed(side: androidx.compose.ui.unit.Dp) = layout { m, c ->
+    val extra = side.roundToPx() * 2
+    val p = m.measure(c.copy(minWidth = c.maxWidth + extra, maxWidth = c.maxWidth + extra))
+    layout(c.maxWidth, p.height) { p.place(-extra / 2, 0) }
+}
+
 @Composable
 private fun UtilityTile(title: String, icon: ImageVector, n: Int, onClick: () -> Unit) {
+    // Icon and count on top, the title on its own line below: names like "Free up space" fit even on small phones.
     Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(12.dp))
-            Text(title, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (n > 0) Text("$n", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.weight(1f))
+                if (n > 0) Text("$n", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp))
         }
     }
 }

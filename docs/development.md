@@ -62,6 +62,9 @@ cd android
 - **Windows gotcha:** if Gradle fails with *"Unable to establish loopback connection"*, the temp folder path is too
   long for Java's Unix-domain sockets. Set `JAVA_TOOL_OPTIONS=-Djdk.net.unixdomain.tmpdir=C:\short\tmp`.
 - **Tests:** `.\gradlew.bat :app:testDebugUnitTest` (JUnit + MockWebServer; no phone needed).
+- **Screenshots without a phone:** `.\gradlew.bat :app:testDebugUnitTest --tests com.footagevault.app.UiShots` runs the
+  real app under Robolectric with made-up videos and saves every main screen (light, dark, and a small phone with large
+  text) to `app/build/ui-shots/`. Use it to compare a UI change before and after.
 - **Signing and Google sign-in:**
   - Release builds are signed with the dedicated key in `android/footage-vault-release.jks`, configured by
     `android/keystore.properties`. Both are git-ignored: back them up, or future updates can't be installed.
