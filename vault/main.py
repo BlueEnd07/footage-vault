@@ -336,19 +336,31 @@ def set_favorite(vid: int, req: FavReq):
     return {"ok": True}
 
 
+@app.post("/api/videos/retry-all")
+def retry_all():
+    rows = db.rows("SELECT id, status FROM videos WHERE status IN ('failed', 'hold')")
+    for v in rows:
+        _retry(v["id"], v["status"])
+    return {"ok": True, "count": len(rows)}
+
+
 @app.post("/api/videos/{vid}/retry")
 def retry(vid: int):
     v = db.row("SELECT status, youtube_id FROM videos WHERE id=?", (vid,))
     if not v or v["status"] not in ("failed", "hold"):
         raise HTTPException(400, "Nothing to retry")
-    if v["status"] == "hold":
+    _retry(vid, v["status"])
+    return {"ok": True}
+
+
+def _retry(vid: int, status: str):
+    if status == "hold":
         # Re-run the safety checks now.
         db.run("UPDATE videos SET status='on_youtube', error=NULL, delete_after=? WHERE id=?", (db.now(), vid))
     elif not (PREVIEWS / f"{vid}.mp4").exists():
         db.run("UPDATE videos SET status='new', error=NULL, attempts=0 WHERE id=?", (vid,))
     else:
         db.run("UPDATE videos SET status='queued', error=NULL, attempts=0, youtube_id=NULL WHERE id=?", (vid,))
-    return {"ok": True}
 
 
 # ---------- free up space on the phone ----------

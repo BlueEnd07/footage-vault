@@ -326,6 +326,12 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                         if (free.isNotEmpty()) Notice(Icons.Outlined.DeleteSweep, "Free up ${BackupWorker.fmtSize(free.sumOf { it.size })}",
                                             com.footagevault.app.data.safelyBackedUp(free), "Free up space") { vm.freeUpSpace() }
                                     }
+                                    if (signedIn && (p is Page.Videos || (p is Page.Filtered && p.f == Filter.PROBLEMS))) {
+                                        val failed = items.count(Filter.PROBLEMS::test)
+                                        if (failed > 0) Notice(Icons.Outlined.ErrorOutline,
+                                            if (failed == 1) "1 video didn't back up" else "$failed videos didn't back up",
+                                            "Usually a network hiccup. Try them all again.", "Retry all") { vm.retryAll() }
+                                    }
                                     if (p is Page.Filtered && p.f == Filter.UPLOADING && shown.isNotEmpty()) {
                                         val (title, why) = vm.uploadState(items)
                                         Notice(Icons.Outlined.CloudUpload, title, why, "Back up now") { vm.backUpNow() }

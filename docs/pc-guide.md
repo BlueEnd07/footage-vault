@@ -32,6 +32,7 @@ for details.
 ## Library
 
 - **Favourites, Uploading, Safe to delete, Problems:** quick lists.
+  When some videos didn't back up, a card at the top offers **Retry all**.
 - **People:** faces found **on this PC** (nothing is uploaded) and grouped by person.
   - Tap someone, then **Add name**.
   - **Same person as…** merges two people. **✕** on a face means "not this person".

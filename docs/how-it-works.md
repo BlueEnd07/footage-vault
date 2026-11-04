@@ -34,7 +34,9 @@ OAuth consent, and no shared server.
 
 Before uploading, each app pulls the channel's uploads and matches local files to them by **file name + length**
 (±2 s or 1%). File names are read from the `fv:` details, the `Original file:` line or the title. Matches are
-marked *backed up* instead of being uploaded. The PC app also fingerprints files (size + first/last 4 MB, or the whole
+marked *backed up* instead of being uploaded. Because cameras reuse names (`DJI_0001` on every card), the PC app also
+requires the same file size (from `fv:`) and a recording day within 24 h, when the channel video tells it; it checks at
+each channel pull (every 30 min) and again, for free, just before each upload. The PC app also fingerprints files (size + first/last 4 MB, or the whole
 file if small) to skip copies it already has. Videos "deleted forever" are remembered as tombstones, so a copy still
 on a phone isn't imported again.
 

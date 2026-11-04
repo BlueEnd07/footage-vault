@@ -461,6 +461,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setColumns(n: Int) { prefs.gridColumns = n; _columns.value = n }
 
     fun retry(item: Item) = io { db.update(item.id, "status" to "queued", "attempts" to 0, "error" to null); BackupWorker.runNow(ctx) }
+    fun retryAll() = io {
+        val failed = db.items("status='failed'")
+        failed.forEach { db.update(it.id, "status" to "queued", "attempts" to 0, "error" to null) }
+        if (failed.isNotEmpty()) BackupWorker.runNow(ctx)
+        say(if (failed.size == 1) "Trying 1 video again" else "Trying ${failed.size} videos again")
+    }
 
     // ---------- app updates (GitHub Releases) ----------
     private val _update = MutableStateFlow<Updater.Update?>(null)

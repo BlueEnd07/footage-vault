@@ -1093,6 +1093,12 @@ function renderNotices() {
   } else if (status.paused_until) {
     html += notice("", "schedule", "YouTube's daily upload limit reached", `Uploads continue by themselves at ${esc(status.paused_until.slice(-5))}.`);
   }
+  const c = status.counts || {};
+  const problems = (c.failed || 0) + (c.hold || 0);
+  if (problems && status.connected) {
+    html += notice("bad", "error", `Problems with ${plural(problems, "video")}`, "Usually a network hiccup. Try them all again, or open one to see why.",
+      `<button class="btn text" id="problemsShow">Show</button><button class="btn filled" id="retryAll">${icon("refresh")}Retry all</button>`);
+  }
   if (imp && imp.running) {
     html += notice("", "folder", `Importing ${esc(imp.folder)}`, `${imp.found} found · ${imp.added} added<div class="bar"><i style="width:${imp.found ? Math.min(100, (imp.added + imp.skipped) / imp.found * 100) : 5}%"></i></div>`);
   } else if (imp && status.local && importDismissed !== imp.folder + imp.found) {
@@ -1105,6 +1111,16 @@ function renderNotices() {
   }
   if (box.innerHTML !== html) box.innerHTML = html;
   const bc = $("#bannerConnect"); if (bc) bc.onclick = connect;
+  const ps = $("#problemsShow"); if (ps) ps.onclick = () => setFilter("problems");
+  const ra = $("#retryAll"); if (ra) ra.onclick = async () => {
+    ra.disabled = true;
+    try {
+      const { count } = await api("/api/videos/retry-all", {});
+      toast(`Trying ${plural(count, "video")} again`);
+    } catch (e) { toast(e.message); }
+    ra.disabled = false;
+    refresh();
+  };
   const ok = $("#importOk"); if (ok) ok.onclick = () => { importDismissed = imp.folder + imp.found; renderNotices(); };
   const ib = $("#installBtn"); if (ib) ib.onclick = async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; renderNotices(); };
   const inb = $("#installNo"); if (inb) inb.onclick = () => { installDismissed = true; renderNotices(); };

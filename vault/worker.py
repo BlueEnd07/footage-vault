@@ -214,6 +214,124 @@ def import_takeout(folder: str) -> None:
             info["running"] = False
 
 
+# ---------- already on YouTube: same file name + length (as the phone app does) ----------
+
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0].lower() if "." in name else name.lower()
+
+
+def source_names(title: str, description: str = "") -> set[str]:
+    """File names a channel video could have come from, read from its title/description.
+    Same rules as Sync.sourceNames on Android."""
+    import json
+    out = set()
+    if m := timeguess._ORIGINAL.search(description or ""):
+        out.add(_stem(m.group(1)))
+    if m := timeguess._FV.search(description or ""):
+        try:
+            out.add(_stem(str(json.loads(m.group(1))["n"])))
+        except (ValueError, KeyError, TypeError):
+            pass
+    out.add(_stem(title.split(" · ", 1)[1] if " · " in title else title))  # vault titles: "2026-10-17 17:55 · VID_…"
+    out.add(_stem(title))
+    return out
+
+
+def same_length(a: float | None, b: float | None) -> bool:
+    if not a or not b:
+        return False
+    return abs(a - b) <= max(2.0, b * 0.01)
+
+
+def _channel_facts(title: str, description: str = "") -> tuple[int | None, datetime | None]:
+    """(file size, recording time) a channel video tells about its original, when it does."""
+    import json
+    size = None
+    if m := timeguess._FV.search(description or ""):
+        try:
+            size = int(json.loads(m.group(1)).get("s") or 0) or None
+        except (ValueError, TypeError, AttributeError):
+            pass
+    t = timeguess.from_fv(description)
+    if not t and (g := timeguess.from_name(title)):
+        t = g[0]
+    return size, t
+
+
+def _same_video(c: dict, v: dict) -> bool:
+    """Same file name is checked by the caller. Names repeat (DJI_0001 on every card), so the
+    length must match too, and the size and day as well when YouTube knows them."""
+    if not same_length(c["duration"], v["duration"]):
+        return False
+    size, t = _channel_facts(c["title"], c.get("description") or "")
+    if size and v["size"] and size != v["size"]:
+        return False
+    if t:
+        try:
+            local = datetime.strptime(v["recorded_at"], "%Y-%m-%d %H:%M:%S")
+        except (TypeError, ValueError):
+            return True
+        if abs((local - t).total_seconds()) > 86400:  # a day covers time zones
+            return False
+    return True
+
+
+def _link_to_youtube(v: dict, yt_id: str) -> None:
+    """A local video found already on the channel: use that copy instead of uploading again.
+    A YouTube-only row for the same video is merged into the local one."""
+    row = db.row("SELECT id, favorite FROM videos WHERE youtube_id=? AND status='youtube' AND id!=?", (yt_id, v["id"]))
+    if row:
+        db.run("UPDATE OR IGNORE album_videos SET video_id=? WHERE video_id=?", (v["id"], row["id"]))
+        db.run("DELETE FROM album_videos WHERE video_id=?", (row["id"],))
+        if row["favorite"]:
+            db.run("UPDATE videos SET favorite=1 WHERE id=?", (v["id"],))
+        faces.forget_video(row["id"])
+        db.run("DELETE FROM videos WHERE id=?", (row["id"],))
+        (THUMBS / f"{row['id']}.jpg").unlink(missing_ok=True)
+    # With a preview it waits for YouTube's processing like a fresh upload; without one,
+    # the preview is made first and it then counts as backed up (see _media_loop).
+    status = "uploaded" if (PREVIEWS / f"{v['id']}.mp4").exists() else "new"
+    db.run("""UPDATE videos SET youtube_id=?, status=?, error=NULL, attempts=0, progress=1,
+              upload_url=NULL, upload_offset=0 WHERE id=?""", (yt_id, status, v["id"]))
+    log.info("%s is already on YouTube (%s); not uploading it again", v["name"], yt_id)
+
+
+def _waiting_for_upload() -> list[dict]:
+    return db.rows("""SELECT * FROM videos WHERE youtube_id IS NULL AND source!='youtube'
+                      AND status IN ('new', 'queued', 'failed')""")
+
+
+def match_local(channel: list[dict]) -> int:
+    """Links local videos that haven't been uploaded to channel videos with the same file name
+    and length. channel: dicts with id, title, description, duration. Returns how many matched."""
+    taken = {r["youtube_id"] for r in db.rows(
+        "SELECT youtube_id FROM videos WHERE youtube_id IS NOT NULL AND status!='youtube'")}
+    by_name: dict[str, list[dict]] = {}
+    for c in channel:
+        for n in source_names(c["title"], c.get("description") or ""):
+            by_name.setdefault(n, []).append(c)
+    matched = 0
+    for v in _waiting_for_upload():
+        m = next((c for c in by_name.get(_stem(v["name"]), [])
+                  if c["id"] not in taken and _same_video(c, v)), None)
+        if m:
+            taken.add(m["id"])
+            _link_to_youtube(v, m["id"])
+            matched += 1
+    return matched
+
+
+def _already_on_youtube(v: dict) -> bool:
+    """Free check just before an upload, against channel videos the vault already knows."""
+    known = db.rows("SELECT youtube_id id, name title, duration FROM videos WHERE status='youtube'")
+    stem = _stem(v["name"])
+    for c in known:
+        if stem in source_names(c["title"]) and _same_video(c, v):
+            _link_to_youtube(v, c["id"])
+            return True
+    return False
+
+
 # ---------- watched folders (e.g. the folder Syncthing copies phone videos into) ----------
 
 _watch_seen: dict[str, tuple] = {}      # path -> (size, mtime) at last scan
@@ -663,6 +781,8 @@ def import_from_youtube() -> dict:
             db.run("""UPDATE videos SET recorded_at=? WHERE youtube_id=? AND status!='youtube'
                       AND ABS(strftime('%s', recorded_at) - strftime('%s', ?)) > 60""",
                    (fv.strftime("%Y-%m-%d %H:%M:%S"), d["id"], fv.strftime("%Y-%m-%d %H:%M:%S")))
+    info["matched"] = match_local(details)  # don't upload what's already there
+    known = {r["youtube_id"] for r in db.rows("SELECT youtube_id FROM videos WHERE youtube_id IS NOT NULL")}
     new_ids = {i for i in ids if i not in known and i not in gone}
     for d in details:
         if d["id"] not in new_ids or d["upload_status"] not in ("processed", "uploaded"):
@@ -779,7 +899,7 @@ def _youtube_loop():
                 continue
             state["paused_until"] = state["pause_reason"] = None
             v = db.row("SELECT * FROM videos WHERE status='queued' ORDER BY recorded_at LIMIT 1")
-            if v:
+            if v and not _already_on_youtube(v):
                 _upload_one(v)
             else:
                 time.sleep(3)
