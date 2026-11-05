@@ -171,6 +171,9 @@ A phone video whose YouTube copy you deleted is marked **don't back up**, so it 
 
 - **Favourites, Uploading, Free up space, Problems:** quick lists.
   When some videos didn't back up, a card at the top offers **Retry all**.
+- **Uploading** shows each video uploading right now with its speed and time left, then what didn't back up
+  (**Retry all**), what's next and what YouTube is still processing. **Pause** stops after the piece being sent;
+  **Resume** continues from there.
 - **Duplicates:** copies of the same video side by side, so you can delete the extras.
   - **Copies** means the same length, plus the same file name, recording time or size.
   - **Delete on phone:** removes that phone copy. Android asks first.

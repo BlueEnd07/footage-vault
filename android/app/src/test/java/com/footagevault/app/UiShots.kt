@@ -63,18 +63,29 @@ class UiShots {
             n++
             val thumb = File(ctx.cacheDir, "t$n.png")
             if (!thumb.exists()) thumb.outputStream().use { thumbBitmap(hues[n % hues.size], hues[(n * 3 + 1) % hues.size]).compress(Bitmap.CompressFormat.PNG, 90, it) }
-            val status = when { d == 0 && k == 0 -> "uploading"; d == 0 && k < 3 -> "queued"; d == 1 && k == 0 -> "failed"; else -> "backed_up" }
+            val status = when {
+                d == 0 && k < 2 -> "uploading"; d == 0 && k < 5 -> "queued"; d == 0 && k == 5 -> "processing"
+                d == 1 && k == 0 -> "failed"; else -> "backed_up"
+            }
             db.insert(ContentValues().apply {
                 put("name", "VID_$n.mp4"); put("size", 50_000_000L + n * 7_000_000L); put("duration_ms", (n * 37_000L) % 600_000 + 8_000)
                 put("width", 1920); put("height", 1080); put("recorded", now - d * day - k * 600_000L)
                 places[d]?.let { put("place", it) }
                 put("status", status); if (status == "uploading") put("progress", 0.4f)
+                if (status == "failed") put("error", "Upload kept failing (network?)")
+                if (d == 0 && k == 3) { put("attempts", 1); put("error", "Network problem"); put("progress", 0.25f) }
                 if (status == "backed_up") { put("yt_id", "yt$n"); put("privacy", "private") }
                 put("favorite", if (n % 7 == 0) 1 else 0)
                 put("on_phone", if (d >= 4) 0 else 1)  // older days: phone copy freed, thumbnail kept
                 put("thumb", thumb.absolutePath)
                 put("kind", if (n % 5 == 0) "photo" else "video")
             })
+        }
+        // Live numbers for the two uploads, as the backup job would report them.
+        val t0 = now - 20_000
+        for (up in db.items("status='uploading'")) {
+            com.footagevault.app.work.UploadLive.start(up.id, up.size, if (up.id % 2L == 0L) up.size / 5 else 0, t0)
+            com.footagevault.app.work.UploadLive.progress(up.id, (up.size * 0.4f).toLong(), t0 + 15_000)
         }
         db.addAlbum("PL1", "Goa trip 2026"); db.addAlbum("PL2", "Family")
         for (i in 10..16) db.addToAlbum("PL1", "yt$i", "x$i")
@@ -114,6 +125,9 @@ class UiShots {
         scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
         rule.onNodeWithText("Library").performClick()
         shot("$tag-3-library")
+        rule.onNodeWithText("Uploading").performClick()
+        shot("$tag-7-uploading")
+        rule.onNodeWithContentDescription("Back").performClick()
         scrollTo("Goa trip 2026"); rule.onNodeWithText("Goa trip 2026").performClick()
         shot("$tag-4-album")
         rule.onNodeWithContentDescription("Back").performClick()

@@ -126,7 +126,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         }
 
         suspend fun lane() {
-            while (!isStopped && !quota) {
+            while (!isStopped && !quota && !prefs.userPaused) {
                 val it = synchronized(lock) {
                     db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND $YOUTUBE", order = "recorded ASC")
                         .firstOrNull { c -> c.id !in busy && c.id !in skip }
@@ -165,9 +165,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         }
                         val progress = longArrayOf(start, it.size)
                         live[it.id] = it.name to progress
+                        UploadLive.start(it.id, it.size, start)
                         var lastItemPct = -1
                         done = yt.uploadFrom(session, applicationContext.contentResolver, Uri.parse(it.uri), it.size, start) { sent ->
                             progress[0] = sent
+                            UploadLive.progress(it.id, sent)
+                            if (prefs.userPaused) throw PausedException()  // the session stays; it continues from here
                             val pct = (sent * 100 / it.size).toInt()
                             if (pct != lastItemPct) {
                                 lastItemPct = pct
@@ -177,6 +180,10 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         }
                     }
                     finished(done)
+                    UploadLive.finished(it.size - start)
+                } catch (e: PausedException) {
+                    db.update(it.id, "status" to "queued", "error" to null)
+                    return
                 } catch (e: ApiException) {
                     if (e.isQuota) {
                         db.update(it.id, "status" to "queued")
@@ -199,6 +206,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     throw e
                 } finally {
                     live.remove(it.id)
+                    UploadLive.end(it.id)
                     synchronized(lock) { busy -= it.id }
                 }
             }
@@ -219,16 +227,18 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     }
 
     private suspend fun telegramLoop() {
-        while (!isStopped) {
+        while (!isStopped && !prefs.userPaused) {
             val it = db.items("status IN ('queued','uploading') AND on_phone=1 AND attempts < 3 AND store='telegram'", order = "recorded ASC")
                 .firstOrNull() ?: return
             val left = db.items("status IN ('queued','uploading') AND on_phone=1 AND store='telegram'").size
             val title = "Backing up · $left left"
             val shown = tryForeground(title, it.name)
             db.update(it.id, "status" to "uploading", "error" to null, "progress" to 0f)
+            UploadLive.start(it.id, it.size, 0)
             try {
                 var lastPct = -1
                 val sent = Telegram.upload(applicationContext, it) { bytes ->
+                    UploadLive.progress(it.id, bytes)
                     val pct = if (it.size > 0) (bytes * 100 / it.size).toInt().coerceIn(0, 100) else 0
                     if (pct != lastPct) {
                         lastPct = pct
@@ -237,6 +247,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     }
                 }
                 db.update(it.id, "status" to "backed_up", "tg_msg" to sent.messageId, "thumb" to sent.thumb, "progress" to 1f)
+                UploadLive.finished(it.size)
             } catch (e: TelegramException) {
                 if (e.isFlood) {  // Telegram asks to slow down: try again on the next run
                     db.update(it.id, "status" to "queued")
@@ -249,6 +260,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             } catch (e: Exception) {
                 db.update(it.id, "status" to "queued", "error" to if (isStopped) null else (e.message ?: "Network problem"))
                 throw e
+            } finally {
+                UploadLive.end(it.id)
             }
         }
     }

@@ -127,7 +127,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             tgWaiting && !tgReady && pending.none { !it.onTelegram } -> "Waiting for sign-in" to
                 "Open Settings → Telegram and sign in to back these up."
             !prefs.signedIn && pending.any { !it.onTelegram } -> "Not signed in" to "Sign in to YouTube (Settings) to start uploading."
-            prefs.userPaused -> "Backup is paused" to "Turn off Pause backup in Settings."
+            prefs.userPaused -> "Backup is paused" to "Nothing is lost: each video continues where it stopped when you resume."
             System.currentTimeMillis() < prefs.pausedUntil -> "Daily upload limit reached" to
                 "Long videos continue by themselves after $resume."
             ImportService.progress.value != null -> ImportService.progress.value!!.let { c ->
@@ -464,12 +464,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setColumns(n: Int) { prefs.gridColumns = n; _columns.value = n }
 
     fun retry(item: Item) = io { db.update(item.id, "status" to "queued", "attempts" to 0, "error" to null); BackupWorker.runNow(ctx) }
+    /**
+     * Every upload that didn't work goes again now: failed ones (still on the phone) back in the queue, and
+     * waiting ones that hit an error lose their back-off so they don't wait for a later run.
+     */
     fun retryAll() = io {
         val failed = db.items("status='failed'")
-        failed.forEach { db.update(it.id, "status" to "queued", "attempts" to 0, "error" to null) }
-        if (failed.isNotEmpty()) BackupWorker.runNow(ctx)
-        say(if (failed.size == 1) "Trying 1 video again" else "Trying ${failed.size} videos again")
+        val again = failed.filter { it.onPhone }  // the file has to be on the phone to upload it
+        again.forEach { db.update(it.id, "status" to "queued", "attempts" to 0, "error" to null) }
+        val stuck = db.items("status='queued' AND (attempts > 0 OR error IS NOT NULL)")
+        stuck.forEach { db.update(it.id, "attempts" to 0, "error" to null) }
+        val n = again.size + stuck.size
+        if (n > 0) BackupWorker.runNow(ctx)
+        val gone = failed.size - again.size
+        say(when {
+            n == 0 && gone > 0 -> if (gone == 1) "That video is no longer on the phone" else "Those videos are no longer on the phone"
+            n == 0 -> "Nothing to try again"
+            else -> (if (n == 1) "Trying 1 video again" else "Trying $n videos again") +
+                if (gone > 0) " · $gone no longer on the phone" else ""
+        })
     }
+
+    private val _paused = MutableStateFlow(prefs.userPaused)
+    val paused = _paused.asStateFlow()
+    /** Same switch as Settings → Pause backup. Uploads stop after the piece they're sending and continue from there. */
+    fun setPaused(on: Boolean) {
+        prefs.userPaused = on
+        _paused.value = on
+        if (!on) BackupWorker.runNow(ctx)
+        say(if (on) "Backup paused" else "Backing up…")
+    }
+    fun syncPaused() { _paused.value = prefs.userPaused }
 
     // ---------- app updates (GitHub Releases) ----------
     private val _update = MutableStateFlow<Updater.Update?>(null)

@@ -113,7 +113,7 @@ fun SettingsScreen(vm: AppViewModel, onClose: () -> Unit) {
                 Card(Icons.Outlined.CloudUpload, "Backup") {
                     Toggle("Only on Wi-Fi", "Never use mobile data for uploads", p.wifiOnly) { p.wifiOnly = it; changed() }
                     Toggle("Only while charging", "Saves battery on big uploads", p.chargingOnly) { p.chargingOnly = it; changed() }
-                    Toggle("Pause backup", null, p.userPaused) { p.userPaused = it; changed() }
+                    Toggle("Pause backup", null, p.userPaused) { p.userPaused = it; vm.syncPaused(); changed() }
                     Toggle("Back up older videos too", "Off: only videos recorded after you set up the app", p.backupFrom == 0L) {
                         p.backupFrom = if (it) 0L else System.currentTimeMillis(); changed()
                     }

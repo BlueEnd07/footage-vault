@@ -301,7 +301,8 @@ function renderUploads() {
   const drives = [...new Set(missingFolders.map((f) => f.slice(0, 2)))].join(", ");
   const preparing = videos.filter((v) => v.status === "new").sort(uploadOrder);
   const processing = videos.filter((v) => v.status === "uploaded");
-  const total = curs.length + queued.length + missing.length + preparing.length + processing.length;
+  const failed = videos.filter((v) => v.status === "failed" && !v.missing).sort(uploadOrder);
+  const total = curs.length + queued.length + missing.length + failed.length + preparing.length + processing.length;
 
   // ---- what's left, and how long it should take at the current (combined) speed
   const curLeft = curs.reduce((n, v) => { const u = liveUpload(v.id); return n + (u ? Math.max(0, u.size - u.sent) : leftOf(v)); }, 0);
@@ -355,6 +356,9 @@ function renderUploads() {
     ? `<p class="up-foot">${icon("cloud_done")}${plural(st.count, "video")} (${fmtSize(st.bytes)}) uploaded since ${parseDate(st.since).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</p>` : "";
 
   const lists =
+    section("Didn't back up", "Usually a network hiccup", failed,
+      (v) => row(v, "", `<span class="up-note warn">${icon("error")}${esc((v.error || "Upload failed").slice(0, 140))}</span>`),
+      `<button class="btn text" id="upRetryAll">${icon("refresh")}Retry all</button>`) +
     section("Up next", "Oldest recordings go first", queued, (v, i) => {
       const startsIn = moving ? fmtLeft(ahead / speed) : "";
       ahead += leftOf(v);
@@ -387,6 +391,15 @@ function renderUploads() {
 function bindUploadButtons(missing) {
   const ra = $("#upRemoveAll");
   if (ra) ra.onclick = () => removeMissing(missing.map((v) => v.id));
+  const rt = $("#upRetryAll");
+  if (rt) rt.onclick = async () => {
+    rt.disabled = true;
+    try {
+      const { count } = await api("/api/videos/retry-all", {});
+      toast(`Trying ${plural(count, "video")} again`);
+    } catch (e) { toast(e.message); }
+    refresh();
+  };
   const pb = $("#upPause");
   if (pb) pb.onclick = async () => {
     pb.disabled = true;

@@ -112,6 +112,7 @@ import com.footagevault.app.ui.isDark
 import com.footagevault.app.ui.Filter
 import com.footagevault.app.ui.LibraryScreen
 import com.footagevault.app.ui.MapScreen
+import com.footagevault.app.ui.UploadsScreen
 import com.footagevault.app.ui.NameDialog
 import com.footagevault.app.ui.Onboarding
 import com.footagevault.app.ui.SettingsScreen
@@ -329,6 +330,9 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                     duplicates = duplicates.size, onDuplicates = { page = Page.Duplicates })
                 Page.Duplicates -> DuplicatesScreen(duplicates, vm) { list, i -> open(list, i) }
                 Page.Map -> MapScreen(items) { it, list -> open(list, list.indexOf(it)) }
+                Page.Filtered(Filter.UPLOADING) -> PullToRefreshBox(isRefreshing = busy, onRefresh = vm::refresh) {
+                    UploadsScreen(items, vm) { list, i -> open(list, i) }
+                }
                 else -> PullToRefreshBox(isRefreshing = busy, onRefresh = vm::refresh) {
                     VideoGrid(
                         shown, selected.toSet(), selecting, columns, vm::setColumns,
@@ -354,10 +358,6 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                                         if (failed > 0) Notice(Icons.Outlined.ErrorOutline, error = true, title =
                                             if (failed == 1) "1 video didn't back up" else "$failed videos didn't back up",
                                             text = "Usually a network hiccup. Try them all again.", action = "Retry all") { vm.retryAll() }
-                                    }
-                                    if (p is Page.Filtered && p.f == Filter.UPLOADING && shown.isNotEmpty()) {
-                                        val (title, why) = vm.uploadState(items)
-                                        Notice(Icons.Outlined.CloudUpload, title, why, "Back up now") { vm.backUpNow() }
                                     }
                                     when (p) {
                                         // What's in it on the left, the one main action on the right; rename/delete are in ⋮.
@@ -469,7 +469,7 @@ private fun androidx.compose.foundation.layout.RowScope.NavItem(sel: Boolean, on
 
 /** Top of an album or event: a count and a line about it, with its main action beside them. */
 @Composable
-private fun PageHead(title: String, sub: String, action: @Composable () -> Unit) {
+internal fun PageHead(title: String, sub: String, action: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
@@ -482,7 +482,7 @@ private fun PageHead(title: String, sub: String, action: @Composable () -> Unit)
 
 /** A card above the grid: what happened, and the one thing to do about it. Problems are tinted red. */
 @Composable
-private fun Notice(icon: ImageVector, title: String, text: String, action: String, error: Boolean = false, onAction: () -> Unit) {
+internal fun Notice(icon: ImageVector, title: String, text: String, action: String, error: Boolean = false, onAction: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Surface(shape = RoundedCornerShape(20.dp), color = if (error) c.errorContainer.copy(alpha = .55f) else c.surfaceContainer,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
