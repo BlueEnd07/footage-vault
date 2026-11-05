@@ -146,7 +146,7 @@ fun UploadsScreen(items: List<Item>, vm: AppViewModel, onOpen: (List<Item>, Int)
                 }
             }, note = {
                 if (it.progress > 0f && it.progress < 1f) Note(Icons.Outlined.Sync, "Continues from ${(it.progress * 100).toInt()}%")
-                if (it.error != null) Note(Icons.Outlined.ErrorOutline, "Try ${it.attempts + 1} of 3 · ${it.error}", error = true)
+                if (it.error != null) Note(Icons.Outlined.ErrorOutline, "${if (it.attempts >= 3) "Stopped after 3 tries" else "Try ${it.attempts + 1} of 3"} · ${it.error}", error = true)
             })
         }
         section("Processing on YouTube", "Usually a few minutes, then it's backed up", processing) { _, it ->

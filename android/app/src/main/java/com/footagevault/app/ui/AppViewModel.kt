@@ -431,6 +431,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- duplicates ----------
 
+    /** The copy "Delete all duplicates" keeps: backed up on YouTube first, then on the phone, then the biggest file. */
+    fun keeper(group: List<Item>): Item =
+        group.maxWith(compareBy<Item>({ it.ytId != null && it.isBackedUp }, { it.onPhone }, { it.size }))
+
+    /**
+     * Keeps one copy of every set and deletes the others. Extra YouTube copies go only when the kept copy is safely
+     * on YouTube; copies still uploading are left alone. Phone copies go through one Android delete prompt.
+     */
+    fun deleteAllDuplicates(groups: List<List<Item>>) = io {
+        var gone = 0; var skipped = 0
+        val phone = mutableListOf<Long>()
+        for (g in groups) {
+            val keep = keeper(g)
+            val safe = keep.ytId != null && keep.isBackedUp
+            for (it in g) {
+                if (it.id == keep.id) continue
+                if (it.isPending) { skipped++; continue }
+                val id = it.ytId
+                if (id != null && id != keep.ytId) {
+                    if (!safe) { skipped++; continue }
+                    try { yt.deleteVideo(id) } catch (e: ApiException) { if (!e.isNotFound) throw e }
+                    forgetYouTubeCopy(db.item(it.id) ?: it)
+                    gone++
+                }
+                if (it.onPhone && it.uri != null) phone += it.id
+            }
+        }
+        val onPhone = phone.mapNotNull { db.item(it) }.filter { it.onPhone && it.uri != null }
+        if (onPhone.isNotEmpty()) requestPhoneDelete(onPhone)
+        say(listOfNotNull(
+            if (gone > 0) "Deleted $gone from YouTube" else null,
+            if (onPhone.isNotEmpty()) "confirm to remove ${onPhone.size} from the phone" else null,
+            if (skipped > 0) "$skipped kept until uploads finish" else null,
+        ).joinToString("; ").replaceFirstChar { it.uppercase() }.ifEmpty { "Nothing to delete" })
+    }
+
     /**
      * Copies of the same video: same length (±1 s) and the same file name, recording time (±3 s) or size.
      * Catches the same clip uploaded twice to YouTube, or saved twice on the phone.

@@ -198,6 +198,27 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
 
     fun update(id: Long, vararg pairs: Pair<String, Any?>) = update(id, cv(*pairs))
 
+    /**
+     * Links row [id] to YouTube video [ytId] (plus [pairs]). A sync can add a YouTube-only row for a video whose upload
+     * finished before the phone saved it; that row is the same video, so it's merged into this one. If another *phone*
+     * row already holds [ytId], nothing changes and that row is returned.
+     */
+    fun linkYt(id: Long, ytId: String, vararg pairs: Pair<String, Any?>): Item? {
+        val w = writableDatabase
+        w.beginTransaction()
+        try {
+            val other = items("yt_id=? AND id<>?", arrayOf(ytId, id.toString())).firstOrNull()
+            if (other != null && other.onPhone) return other
+            if (other != null) w.delete("items", "id=?", arrayOf(other.id.toString()))
+            w.update("items", cv("yt_id" to ytId, *pairs), "id=?", arrayOf(id.toString()))
+            w.setTransactionSuccessful()
+            return null
+        } finally {
+            w.endTransaction()
+            bump()
+        }
+    }
+
     fun delete(id: Long) {
         writableDatabase.delete("items", "id=?", arrayOf(id.toString()))
         bump()

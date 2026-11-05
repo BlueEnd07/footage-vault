@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -46,6 +47,7 @@ import java.util.Locale
 @Composable
 fun DuplicatesScreen(groups: List<List<Item>>, vm: AppViewModel, onOpen: (List<Item>, Int) -> Unit) {
     var confirm by remember { mutableStateOf<Pair<Item, String>?>(null) }  // item, "youtube" | "phone"
+    var confirmAll by remember { mutableStateOf(false) }
     if (groups.isEmpty()) {
         Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 12.dp))
@@ -59,11 +61,15 @@ fun DuplicatesScreen(groups: List<List<Item>>, vm: AppViewModel, onOpen: (List<I
         item {
             Text("${groups.size} set${if (groups.size == 1) "" else "s"} of copies. Keep one of each and delete the rest.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+            FilledTonalButton(onClick = { confirmAll = true }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                Text("Delete all duplicates")
+            }
         }
         items(groups, key = { g -> g.joinToString(",") { it.id.toString() } }) { group ->
+            val keep = vm.keeper(group)
             Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
                 LazyRow(contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(group, key = { it.id }) { it -> Copy(it, onOpen = { onOpen(group, group.indexOf(it)) }) { kind -> confirm = it to kind } }
+                    items(group, key = { it.id }) { it -> Copy(it, kept = it.id == keep.id, onOpen = { onOpen(group, group.indexOf(it)) }) { kind -> confirm = it to kind } }
                 }
             }
         }
@@ -77,10 +83,20 @@ fun DuplicatesScreen(groups: List<List<Item>>, vm: AppViewModel, onOpen: (List<I
             onConfirm = { if (kind == "youtube") vm.deleteFromYouTube(item) else vm.removeFromPhone(listOf(item)); confirm = null },
         ) { confirm = null }
     }
+    if (confirmAll) {
+        val extras = groups.sumOf { it.size - 1 }
+        ConfirmDialog(
+            title = "Delete $extras duplicate${if (extras == 1) "" else "s"}?",
+            text = "One copy of each set stays (the one marked \"Kept\"). The others are deleted from YouTube permanently and from " +
+                "the phone. Copies still uploading are left for now.",
+            confirm = "Delete all",
+            onConfirm = { vm.deleteAllDuplicates(groups); confirmAll = false },
+        ) { confirmAll = false }
+    }
 }
 
 @Composable
-private fun Copy(it: Item, onOpen: () -> Unit, onDelete: (String) -> Unit) {
+private fun Copy(it: Item, kept: Boolean, onOpen: () -> Unit, onDelete: (String) -> Unit) {
     val t = Instant.ofEpochMilli(it.recorded).atZone(ZoneId.systemDefault())
     Column(Modifier.width(150.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
@@ -94,6 +110,7 @@ private fun Copy(it: Item, onOpen: () -> Unit, onDelete: (String) -> Unit) {
             else -> "YouTube" + (it.privacy?.let { p -> " · $p" } ?: "")
         }
         Text(where, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 8.dp))
+        if (kept) Text("Kept by Delete all duplicates", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         Text(it.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(listOfNotNull(DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a", Locale.getDefault()).format(t),

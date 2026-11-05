@@ -97,7 +97,12 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
         for (v in infos) for (n in sourceNames(v)) byName.getOrPut(n) { mutableListOf() } += v
         val taken = db.items("yt_id IS NOT NULL").mapNotNull { it.ytId }.toMutableSet()
         for (it in db.items("yt_id IS NULL AND on_phone=1 AND kind='video' AND (store IS NULL OR store='youtube')")) {
-            val m = byName[stem(it.name)]?.firstOrNull { v -> v.id !in taken && sameLength(v.durationS, it.durationMs) } ?: continue
+            // A video YouTube is still processing has no length yet. If this phone video has an upload under way, that
+            // is its upload finishing: link it now, or it would also be added below as a YouTube-only copy.
+            val m = byName[stem(it.name)]?.firstOrNull { v ->
+                v.id !in taken && (sameLength(v.durationS, it.durationMs) ||
+                    it.uploadUrl != null && v.uploadStatus != "processed" && v.durationS == 0.0)
+            } ?: continue
             taken += m.id
             // A YouTube-only row for the same video is replaced by the phone row.
             db.byYt(m.id)?.let { row -> if (!row.onPhone) db.delete(row.id) }

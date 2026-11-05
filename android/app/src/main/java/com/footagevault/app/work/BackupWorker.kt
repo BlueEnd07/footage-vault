@@ -84,7 +84,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             else if (e.isAuth) Notify.signInNeeded(applicationContext)
             prefs.lastError = if (e.isQuota) null else e.message
         } catch (e: Exception) {
-            if (!isStopped) prefs.lastError = e.message ?: e.javaClass.simpleName  // stopped by Android: not a problem
+            if (!isStopped) prefs.lastError = describe(e)  // stopped by Android: not a problem
             return Result.retry()
         } finally {
             Importer.cleanBackedUp(applicationContext)  // also after a quota stop or an error
@@ -140,18 +140,25 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         }
                 } ?: return
                 if (!shown) shown = tryForeground(title, it.name)
-                suspend fun finished(result: JSONObject) {
+                var stage = "Starting"  // what the lane was doing, for the error shown on the Uploading screen
+                fun finished(result: JSONObject) {
                     val vid = result.getString("id")
                     val privacy = result.optJSONObject("status")?.optString("privacyStatus")
                     if (prefs.privacy == "unlisted" && privacy == "private") prefs.forcedPrivate = true
-                    db.update(it.id, "status" to "processing", "yt_id" to vid, "upload_url" to null, "progress" to 1f, "privacy" to privacy)
+                    val clash = db.linkYt(it.id, vid, "status" to "processing", "upload_url" to null, "progress" to 1f,
+                        "privacy" to privacy, "error" to null)
+                    if (clash != null) db.update(it.id, "status" to "failed", "upload_url" to null, "attempts" to 3,
+                        "error" to "Uploaded, but \"${clash.name}\" on this phone is already linked to the same YouTube " +
+                            "video ($vid). It's backed up; delete the extra copy in Library → Duplicates.")
                 }
                 try {
+                    stage = "Refreshing Google sign-in"
                     refreshToken()
                     var session = it.uploadUrl
                     var start = 0L
                     var done: JSONObject? = null
                     if (session != null) {
+                        stage = "Checking the earlier upload"
                         when (val state = yt.probeUpload(session, it.size)) {
                             is YouTube.UploadState.Resume -> start = state.offset
                             is YouTube.UploadState.Complete -> done = state.video
@@ -163,6 +170,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     }
                     if (done == null) {
                         if (session == null) {
+                            stage = "Starting the upload"
                             session = yt.startUpload(sync.uploadMeta(it), it.size)
                             db.update(it.id, "upload_url" to session)
                         }
@@ -170,6 +178,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         live[it.id] = it.name to progress
                         UploadLive.start(it.id, it.size, start)
                         var lastItemPct = -1
+                        stage = "Sending the video"
                         done = yt.uploadFrom(session, applicationContext.contentResolver, Uri.parse(it.uri), it.size, start) { sent ->
                             progress[0] = sent
                             UploadLive.progress(it.id, sent)
@@ -182,6 +191,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                             }
                         }
                     }
+                    stage = "Saving the finished upload"
                     finished(done)
                     UploadLive.finished(it.size - start)
                 } catch (e: PausedException) {
@@ -195,18 +205,22 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         return
                     }
                     if (e.code == 404 || e.code == 410) db.update(it.id, "upload_url" to null)  // session expired: start over
-                    fail(it.id, it.attempts, e.message)
+                    fail(it.id, it.attempts, "$stage: ${e.message}")
                     synchronized(lock) { skip += it.id }
                 } catch (e: java.io.FileNotFoundException) {
-                    db.update(it.id, "status" to "failed", "error" to "The file is no longer on the phone")
+                    db.update(it.id, "status" to "failed", "error" to "$stage: the file is no longer on the phone")
                 } catch (e: CancellationException) {
                     // Stopped by Android, or another lane lost the network: keep the session, resume next time.
                     db.update(it.id, "status" to "queued", "error" to null)
                     throw e
-                } catch (e: Exception) {
+                } catch (e: java.io.IOException) {
                     // Network dropped: keep the session, resume next time.
-                    db.update(it.id, "status" to "queued", "error" to if (isStopped) null else (e.message ?: "Network problem"))
+                    db.update(it.id, "status" to "queued", "error" to if (isStopped) null else "$stage: network problem · ${describe(e)}")
                     throw e
+                } catch (e: Exception) {
+                    // A bug or a database problem with this one video: count it as a try and let the other videos go on.
+                    fail(it.id, it.attempts, "$stage: ${describe(e)}")
+                    synchronized(lock) { skip += it.id }
                 } finally {
                     live.remove(it.id)
                     UploadLive.end(it.id)
@@ -277,6 +291,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     private suspend fun tryForeground(title: String, text: String): Boolean = try {
         setForeground(foreground(title, text, 0)); true
     } catch (_: IllegalStateException) { false }
+
+    /** "SQLiteConstraintException: UNIQUE constraint failed…" — the kind of error as well as its text. */
+    private fun describe(e: Throwable): String {
+        val text = e.message?.takeIf { it.isNotBlank() } ?: e.cause?.message
+        return listOfNotNull(e.javaClass.simpleName, text).joinToString(": ").take(300)
+    }
 
     private fun fail(id: Long, attempts: Int, msg: String?) {
         val n = attempts + 1

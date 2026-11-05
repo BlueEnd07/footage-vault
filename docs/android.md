@@ -174,7 +174,9 @@ A phone video whose YouTube copy you deleted is marked **don't back up**, so it 
 - **Uploading** shows each video uploading right now with its speed and time left, then what didn't back up
   (**Retry all**), what's next and what YouTube is still processing. **Pause** stops after the piece being sent;
   **Resume** continues from there.
-- **Duplicates:** copies of the same video side by side, so you can delete the extras.
+- **Duplicates:** copies of the same video side by side, so you can delete the extras one by one, or tap
+  **Delete all duplicates** to keep one copy of each set (backed up on YouTube first, then on the phone) and delete the
+  rest. Extra YouTube copies are only deleted when the kept copy is safely on YouTube; copies still uploading are left.
   - **Copies** means the same length, plus the same file name, recording time or size.
   - **Delete on phone:** removes that phone copy. Android asks first.
   - **Delete on YouTube:** permanently deletes that copy from your channel.
