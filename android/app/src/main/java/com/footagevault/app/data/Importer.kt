@@ -15,7 +15,7 @@ import java.time.ZoneOffset
 /**
  * Videos shared to the app (e.g. from Google Photos: select an album's videos → Share → Footage Vault).
  * Share links only last while the share screen is open, so each video is copied into the app's own storage,
- * uploaded like a phone video, and the copy is deleted once YouTube has it (see Sync.cleanImports).
+ * uploaded like a phone video, and the copy is deleted once YouTube has it (see Importer.cleanBackedUp).
  */
 object Importer {
     const val BUCKET = "Google Photos"
@@ -160,6 +160,18 @@ object Importer {
         for (it in db.items("status='copied'")) db.update(it.id, "status" to "queued")
         val used = db.items("uri LIKE 'file:%'").mapNotNull { it.uri?.let(Uri::parse)?.path }.toSet()
         dir(ctx).listFiles()?.forEach { f -> if (f.path !in used) f.delete() }
+    }
+
+    /**
+     * Copies shared in from Google Photos are deleted once they're backed up (YouTube or Telegram), so they only
+     * take space while waiting to upload.
+     */
+    fun cleanBackedUp(ctx: Context) {
+        val db = Db.get(ctx)
+        for (it in db.items("uri LIKE 'file:%' AND status='backed_up'")) {
+            deleteCopy(it)
+            db.update(it.id, "on_phone" to false, "uri" to null)
+        }
     }
 
     /** Deletes the app's own copy of an imported video. */

@@ -95,6 +95,10 @@ object Telegram {
         val prefs = Prefs(ctx)
         if (prefs.tgApiId == 0 || prefs.tgApiHash.isNullOrBlank()) { _state.value = State.NotSetUp; return null }
         _state.value = State.Starting
+        // Once per app start, before anything is sent or fetched: drop the last run's leftovers.
+        // tgup: temporary copies for uploads (deleted after each send, but not if the app was killed).
+        // tdlib: originals downloaded to view or share (fetched again when needed; see fetch()).
+        withContext(Dispatchers.IO) { listOf("tgup", "tdlib").forEach { File(ctx.cacheDir, it).deleteRecursively() } }
         val c = TdlClient.create()
         client = c
         val app = ctx.applicationContext

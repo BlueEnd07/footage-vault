@@ -164,14 +164,6 @@ class Sync(private val ctx: Context, private val yt: YouTube) {
         }
     }
 
-    /** Copies shared in from Google Photos are deleted once YouTube has finished with them. */
-    fun cleanImports() {
-        for (it in db.items("uri LIKE 'file:%' AND status='backed_up'")) {
-            com.footagevault.app.data.Importer.deleteCopy(it)
-            db.update(it.id, "on_phone" to false, "uri" to null)
-        }
-    }
-
     /** Uploaded videos YouTube has finished processing become "backed up". */
     suspend fun checkProcessing() {
         val waiting = db.items("status='processing' AND yt_id IS NOT NULL")

@@ -50,12 +50,14 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     override suspend fun doWork(): Result {
         if (!ImportService.running) Importer.recover(applicationContext)
+        Importer.cleanBackedUp(applicationContext)
         runCatching { MediaScanner.scan(applicationContext) }
         runCatching { MediaScanner.fillLocations(applicationContext) }
         // Photos and short videos: Telegram, independent of YouTube (and of its daily limit).
         try { telegramUploads() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
             if (!isStopped) problem = "Telegram: ${e.message ?: e.javaClass.simpleName}"
         }
+        Importer.cleanBackedUp(applicationContext)  // Telegram-only setups never reach the YouTube part below
         if (!prefs.signedIn) { prefs.lastError = problem; return Result.success() }
         val token = Auth.silentToken(applicationContext)
         if (token == null) {
@@ -76,7 +78,6 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             uploadQueued(sync, yt) { current = Auth.silentToken(applicationContext) ?: current }
             step { sync.checkProcessing() }
             step { sync.pushPendingAlbums() }
-            sync.cleanImports()
             prefs.lastError = problem
         } catch (e: ApiException) {
             if (e.isQuota) prefs.pausedUntil = nextQuotaReset()
@@ -85,6 +86,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         } catch (e: Exception) {
             if (!isStopped) prefs.lastError = e.message ?: e.javaClass.simpleName  // stopped by Android: not a problem
             return Result.retry()
+        } finally {
+            Importer.cleanBackedUp(applicationContext)  // also after a quota stop or an error
         }
         announce()
         return Result.success()
