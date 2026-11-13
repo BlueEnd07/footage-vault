@@ -287,7 +287,7 @@ private fun AutoPreview(item: Item) {
     if (!start || item.uri == null) return
     val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(450), label = "preview")
     val player = remember(item.id) {
-        androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build().apply {
+        Players.local(ctx).build().apply {
             volume = 0f
             repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
             setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(item.uri)))

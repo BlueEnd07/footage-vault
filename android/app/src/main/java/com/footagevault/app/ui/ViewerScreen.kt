@@ -446,7 +446,7 @@ private fun LocalPlayer(item: Item, prefs: com.footagevault.app.data.Prefs) {
     val key = "m${item.id}"
     var flash by remember { mutableStateOf<Pair<Int, Long>?>(null) }  // (-1 | 1, when)
     val player = remember(item.id) {
-        ExoPlayer.Builder(ctx).setSeekBackIncrementMs(10_000).setSeekForwardIncrementMs(10_000).build().apply {
+        Players.local(ctx).setSeekBackIncrementMs(10_000).setSeekForwardIncrementMs(10_000).build().apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(item.uri)))
             prepare()
             val at = prefs.resumeAt(key)
