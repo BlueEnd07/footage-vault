@@ -198,6 +198,14 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "vault.db", n
 
     fun update(id: Long, vararg pairs: Pair<String, Any?>) = update(id, cv(*pairs))
 
+    /** Same change to many rows in one transaction, so the screens refresh once instead of once per row. */
+    fun updateAll(ids: Collection<Long>, vararg pairs: Pair<String, Any?>) {
+        if (ids.isEmpty()) return
+        val values = cv(*pairs)
+        writableDatabase.transaction { for (id in ids) update("items", values, "id=?", arrayOf(id.toString())) }
+        bump()
+    }
+
     /**
      * Links row [id] to YouTube video [ytId] (plus [pairs]). A sync can add a YouTube-only row for a video whose upload
      * finished before the phone saved it; that row is the same video, so it's merged into this one. If another *phone*

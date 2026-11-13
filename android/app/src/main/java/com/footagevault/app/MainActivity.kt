@@ -172,6 +172,7 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     val duplicates by vm.duplicates.collectAsState()
     val update by vm.update.collectAsState()
     val updateProgress by vm.updateProgress.collectAsState()
+    var crash by remember { mutableStateOf(CrashLog.last(ctx)) }  // saved when the app last crashed
     LaunchedEffect(Unit) { vm.checkForUpdate() }
     var page by remember { mutableStateOf<Page>(when (startScreen) { "free" -> Page.Filtered(Filter.FREE); "problems" -> Page.Filtered(Filter.PROBLEMS); "uploading" -> Page.Filtered(Filter.UPLOADING); else -> Page.Videos }) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -208,7 +209,8 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
     LaunchedEffect(Unit) {
         vm.intents.collect { si ->
             val req = IntentSenderRequest.Builder(si.pi.intentSender).build()
-            if (si.kind == "auth") authLauncher.launch(req) else deleteLauncher.launch(req)
+            try { if (si.kind == "auth") authLauncher.launch(req) else deleteLauncher.launch(req) }
+            catch (e: Exception) { if (si.kind == "auth") vm.say("Google sign-in couldn't open") else vm.onDeletePromptFailed(e) }
         }
     }
     LaunchedEffect(Unit) { vm.messages.collect { snack.showSnackbar(it) } }
@@ -341,6 +343,12 @@ private fun Root(vm: AppViewModel, startScreen: String?) {
                         header = {
                             item(span = { GridItemSpan(maxLineSpan) }) {
                                 Column(Modifier.animateContentSize()) {
+                                    crash?.let { report ->
+                                        Notice(Icons.Outlined.ErrorOutline, "The app closed unexpectedly", error = true,
+                                            text = "Send the crash report so it can be fixed.", action = "Send report") {
+                                            CrashLog.share(ctx, report); CrashLog.clear(ctx); crash = null
+                                        }
+                                    }
                                     update?.let { u ->
                                         val prog = updateProgress
                                         Notice(Icons.Outlined.SystemUpdate, "Update available: ${u.name}",

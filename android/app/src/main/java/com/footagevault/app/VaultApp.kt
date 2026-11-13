@@ -12,6 +12,7 @@ import org.osmdroid.config.Configuration
 class VaultApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)  // first, so a crash anywhere below is saved too
         Notify.channels(this)
         Configuration.getInstance().userAgentValue = "FootageVault/1.0 (Android)"
         BackupWorker.schedule(this, replace = true)  // also picks up new retry rules after an update

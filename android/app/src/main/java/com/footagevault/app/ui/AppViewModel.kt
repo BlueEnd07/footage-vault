@@ -55,6 +55,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _intents = MutableSharedFlow<SysIntent>(extraBufferCapacity = 2)
     val intents = _intents.asSharedFlow()
     private var pendingDelete: List<Item> = emptyList()
+    /** Gallery videos waiting for the next delete prompt (big lists go in batches; see [DELETE_BATCH]). */
+    private var queuedDelete: List<Item> = emptyList()
+    private var freedBytes = 0L
 
     private val yt = YouTube { Auth.silentToken(ctx) ?: throw ApiException(401, "Sign in to YouTube first") }
     private val sync = Sync(ctx, yt)
@@ -362,8 +365,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val (copies, gallery) = list.partition { it.isImport }
         for (it in copies) { com.footagevault.app.data.Importer.deleteCopy(it); forgetPhoneCopy(it) }
         if (gallery.isEmpty()) { if (copies.isNotEmpty()) say("Deleted from the phone"); return }
-        pendingDelete = gallery
-        _intents.tryEmit(SysIntent("delete", MediaStore.createDeleteRequest(ctx.contentResolver, gallery.map { Uri.parse(it.uri) })))
+        queuedDelete = gallery
+        freedBytes = 0L
+        promptNextDelete()
+    }
+
+    /**
+     * One system prompt per batch: a single request for thousands of videos is too big for Android to hand to its
+     * delete screen, and the app crashed.
+     */
+    private fun promptNextDelete() {
+        val batch = queuedDelete.take(DELETE_BATCH)
+        queuedDelete = queuedDelete.drop(DELETE_BATCH)
+        pendingDelete = batch
+        if (batch.isEmpty()) return
+        val pi = try { MediaStore.createDeleteRequest(ctx.contentResolver, batch.map { Uri.parse(it.uri) }) }
+        catch (e: Exception) { pendingDelete = emptyList(); queuedDelete = emptyList(); throw e }
+        _intents.tryEmit(SysIntent("delete", pi))
     }
 
     private fun forgetPhoneCopy(it: Item) {
@@ -373,11 +391,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** After the system delete prompt. */
     fun onDeleteResult(ok: Boolean) = io {
-        if (!ok) { pendingDelete = emptyList(); return@io }
-        val bytes = pendingDelete.sumOf { it.size }
-        for (it in pendingDelete) forgetPhoneCopy(it)
-        say(if (pendingDelete.all { it.ytId != null || it.tgMsg != null }) "Freed ${BackupWorker.fmtSize(bytes)}. They're still in your backup." else "Deleted from the phone")
+        if (!ok) { pendingDelete = emptyList(); queuedDelete = emptyList(); return@io }
+        val done = pendingDelete
+        freedBytes += done.sumOf { it.size }
+        for (it in done) forgetPhoneCopy(it)
         pendingDelete = emptyList()
+        if (queuedDelete.isNotEmpty()) {
+            say("Deleted ${done.size}. Confirm the next ${minOf(DELETE_BATCH, queuedDelete.size)}…")
+            return@io promptNextDelete()
+        }
+        say(if (done.all { it.ytId != null || it.tgMsg != null }) "Freed ${BackupWorker.fmtSize(freedBytes)}. They're still in your backup." else "Deleted from the phone")
+    }
+
+    /** The delete prompt couldn't open (e.g. Android refused the request). */
+    fun onDeletePromptFailed(e: Exception) {
+        pendingDelete = emptyList(); queuedDelete = emptyList()
+        say("Couldn't open Android's delete prompt: ${e.message ?: e.javaClass.simpleName}")
     }
 
     /** Removes these from the phone without the YouTube check (used for duplicate copies). */
@@ -507,9 +536,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun retryAll() = io {
         val failed = db.items("status='failed'")
         val again = failed.filter { it.onPhone }  // the file has to be on the phone to upload it
-        again.forEach { db.update(it.id, "status" to "queued", "attempts" to 0, "error" to null) }
+        db.updateAll(again.map { it.id }, "status" to "queued", "attempts" to 0, "error" to null)
         val stuck = db.items("status='queued' AND (attempts > 0 OR error IS NOT NULL)")
-        stuck.forEach { db.update(it.id, "attempts" to 0, "error" to null) }
+        db.updateAll(stuck.map { it.id }, "attempts" to 0, "error" to null)
         val n = again.size + stuck.size
         if (n > 0) BackupWorker.runNow(ctx)
         val gone = failed.size - again.size
@@ -585,4 +614,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Photo access was just allowed, or the channel became ready: pick up the photos. */
     fun tgChanged() = io { Router.reroute(db, prefs); MediaScanner.scan(ctx); BackupWorker.runNow(ctx) }
     fun setShortMinutes(min: Int) { prefs.tgShortMinutes = min; tgChanged() }
+
+    companion object {
+        /** Videos per system delete prompt. */
+        const val DELETE_BATCH = 200
+    }
 }
+
